@@ -10,25 +10,26 @@ export let LAYER2_MODEL = process.env.LAYER2 || "openai/gpt-oss-120b";
 export const VOYAGE_MODEL = process.env.VOYAGE_MODEL || "voyage-4";
 export function getVoyageKey(): string {
   if (process.env.VOYAGE_API_KEY) return process.env.VOYAGE_API_KEY;
-  try {
-    const envPath = join(process.cwd(), "..", ".env");
-    const envContent = readFileSync(envPath, "utf-8");
-    const match = envContent.match(/VOYAGE_API_KEY=(.+)/);
-    if (match) return match[1].trim();
-  } catch {}
+  for (const dir of [process.cwd(), join(process.cwd(), "..")]) {
+    try {
+      const envContent = readFileSync(join(dir, ".env"), "utf-8");
+      const match = envContent.match(/VOYAGE_API_KEY=(.+)/);
+      if (match) return match[1].trim();
+    } catch {}
+  }
   throw new Error("No VOYAGE_API_KEY found");
 }
 
 // OpenRouter
 export function getOpenRouterKey(): string {
-  // Check env directly, then parent .env
   if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
-  try {
-    const envPath = join(process.cwd(), "..", ".env");
-    const envContent = readFileSync(envPath, "utf-8");
-    const match = envContent.match(/OPENROUTER_API_KEY=(.+)/);
-    if (match) return match[1].trim();
-  } catch {}
+  for (const dir of [process.cwd(), join(process.cwd(), "..")]) {
+    try {
+      const envContent = readFileSync(join(dir, ".env"), "utf-8");
+      const match = envContent.match(/OPENROUTER_API_KEY=(.+)/);
+      if (match) return match[1].trim();
+    } catch {}
+  }
   throw new Error("No OPENROUTER_API_KEY found");
 }
 
