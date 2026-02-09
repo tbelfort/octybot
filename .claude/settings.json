@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun memory/hooks/on-prompt.ts",
+            "timeout": 15,
+            "statusMessage": "Retrieving memories..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun memory/hooks/on-stop.ts",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}
