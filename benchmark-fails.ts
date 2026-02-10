@@ -229,34 +229,34 @@ async function seedDb() {
 
   // Instructions
   const instrData = [
-    { c: "Always check AI detection using Originality.ai before submitting content to clients. Score must be above 80% original.", sal: 2.5, links: [{ t: originalityId, e: "about" }, { t: wobsId, e: "about" }] },
-    { c: "Every article must score at least 75/100 on Surfer SEO before publishing. If it's below 75, send it back to the writer for optimization.", sal: 2.5, links: [{ t: surferId, e: "about" }] },
-    { c: "Never publish an article without Sarah's approval. She must sign off on every piece before it goes live.", sal: 2.5, links: [{ t: sarahId, e: "about" }] },
-    { c: "Meridian Health articles require an additional step: after Sarah's review, send the article to Meridian's in-house medical reviewer for accuracy sign-off before publishing.", sal: 2.0, links: [{ t: meridianId, e: "about" }] },
-    { c: "All client communication should go through Lisa unless it's a strategic/pricing discussion, which Marcus handles.", sal: 2.0, links: [{ t: lisaId, e: "about" }, { t: marcusId, e: "about" }] },
-    { c: "When a writer misses a deadline, immediately notify the client through Lisa and offer expedited delivery within 24 hours.", sal: 2.0, links: [{ t: lisaId, e: "about" }] },
-    { c: "Monthly GSC reports must be sent to clients by the 5th of each month. Marcus reviews them before they go out.", sal: 2.0, links: [{ t: gscId, e: "about" }, { t: marcusId, e: "about" }] },
-    { c: "For white-label clients like Canopy Digital, never include any WOBS branding, watermarks, or attribution in the content.", sal: 2.0, links: [{ t: canopyId, e: "about" }] },
+    { c: "Always check AI detection using Originality.ai before submitting content to clients. Score must be above 80% original.", sal: 2.5, scope: 1.0, links: [{ t: originalityId, e: "about" }, { t: wobsId, e: "about" }] },
+    { c: "Every article must score at least 75/100 on Surfer SEO before publishing. If it's below 75, send it back to the writer for optimization.", sal: 2.5, scope: 1.0, links: [{ t: surferId, e: "about" }] },
+    { c: "Never publish an article without Sarah's approval. She must sign off on every piece before it goes live.", sal: 2.5, scope: 1.0, links: [{ t: sarahId, e: "about" }] },
+    { c: "Meridian Health articles require an additional step: after Sarah's review, send the article to Meridian's in-house medical reviewer for accuracy sign-off before publishing.", sal: 2.0, scope: 0.3, links: [{ t: meridianId, e: "about" }] },
+    { c: "All client communication should go through Lisa unless it's a strategic/pricing discussion, which Marcus handles.", sal: 2.0, scope: 0.9, links: [{ t: lisaId, e: "about" }, { t: marcusId, e: "about" }] },
+    { c: "When a writer misses a deadline, immediately notify the client through Lisa and offer expedited delivery within 24 hours.", sal: 2.0, scope: 0.9, links: [{ t: lisaId, e: "about" }] },
+    { c: "Monthly GSC reports must be sent to clients by the 5th of each month. Marcus reviews them before they go out.", sal: 2.0, scope: 0.8, links: [{ t: gscId, e: "about" }, { t: marcusId, e: "about" }] },
+    { c: "For white-label clients like Canopy Digital, never include any WOBS branding, watermarks, or attribution in the content.", sal: 2.0, scope: 0.3, links: [{ t: canopyId, e: "about" }] },
   ];
   for (const i of instrData) {
-    const id = createNode({ node_type: "fact", subtype: "instruction", content: i.c, salience: i.sal, confidence: 1.0, source: "user", attributes: {} });
+    const id = createNode({ node_type: "instruction", subtype: "instruction", content: i.c, salience: i.sal, confidence: 1.0, source: "user", attributes: {}, scope: i.scope });
     for (const l of i.links) createEdge({ source_id: id, target_id: l.t, edge_type: l.e });
   }
 
   // Processes
   const procData = [
-    { c: "To look up an order in Airtable: Open the WOBS Orders base → go to the 'Active Orders' view → filter by client name.", sal: 1.8, links: [{ t: airtableId, e: "about" }] },
-    { c: "Content creation workflow at WOBS: 1) Lisa creates the assignment in Airtable with keyword and deadline. 2) Writer drafts the article. 3) Writer submits to Sarah for review. 4) Sarah checks quality, Surfer score, and Originality score. 5) If passes, Sarah publishes to WordPress. 6) Lisa updates Airtable status.", sal: 1.8, links: [{ t: wobsId, e: "about" }, { t: airtableId, e: "about" }, { t: wordpressId, e: "about" }] },
+    { c: "To look up an order in Airtable: Open the WOBS Orders base → go to the 'Active Orders' view → filter by client name.", sal: 1.8, scope: 0.5, links: [{ t: airtableId, e: "about" }] },
+    { c: "Content creation workflow at WOBS: 1) Lisa creates the assignment in Airtable with keyword and deadline. 2) Writer drafts the article. 3) Writer submits to Sarah for review. 4) Sarah checks quality, Surfer score, and Originality score. 5) If passes, Sarah publishes to WordPress. 6) Lisa updates Airtable status.", sal: 1.8, scope: 0.7, links: [{ t: wobsId, e: "about" }, { t: airtableId, e: "about" }, { t: wordpressId, e: "about" }] },
   ];
   for (const p of procData) {
-    const id = createNode({ node_type: "fact", subtype: "tool_usage", content: p.c, salience: p.sal, confidence: 1.0, source: "user", attributes: {} });
+    const id = createNode({ node_type: "instruction", subtype: "tool_usage", content: p.c, salience: p.sal, confidence: 1.0, source: "user", attributes: {}, scope: p.scope });
     for (const l of p.links) createEdge({ source_id: id, target_id: l.t, edge_type: l.e });
   }
 
   // Opinions
   const opinData = [
-    { c: "I think Dave needs more training before handling Meridian Health articles — the medical inaccuracy issues are concerning", sal: 0.7, links: [{ t: daveId, e: "about" }, { t: meridianId, e: "about" }] },
-    { c: "Canopy Digital might be more trouble than they're worth — the white-label requirement adds complexity and they're paying standard rates", sal: 0.7, links: [{ t: canopyId, e: "about" }] },
+    { c: "I think Dave needs more training before handling Meridian Health articles — the medical inaccuracy issues are concerning", sal: 1.0, links: [{ t: daveId, e: "about" }, { t: meridianId, e: "about" }] },
+    { c: "Canopy Digital might be more trouble than they're worth — the white-label requirement adds complexity and they're paying standard rates", sal: 1.0, links: [{ t: canopyId, e: "about" }] },
   ];
   for (const o of opinData) {
     const id = createNode({ node_type: "opinion", subtype: "user_opinion", content: o.c, salience: o.sal, confidence: 1.0, source: "user", attributes: {} });

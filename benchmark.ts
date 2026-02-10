@@ -594,50 +594,50 @@ async function seedDb() {
 
   // ── Instructions ──
   const instrData = [
-    { c: "Always check AI detection using Originality.ai before submitting content to clients. Score must be above 80% original.", sal: 2.5, links: [{ t: originalityId, e: "about" }, { t: wobsId, e: "about" }] },
-    { c: "Every article must score at least 75/100 on Surfer SEO before publishing. If it's below 75, send it back to the writer for optimization.", sal: 2.5, links: [{ t: surferId, e: "about" }] },
-    { c: "Never publish an article without Sarah's approval. She must sign off on every piece before it goes live.", sal: 2.5, links: [{ t: sarahId, e: "about" }] },
-    { c: "Meridian Health articles require an additional step: after Sarah's review, send the article to Meridian's in-house medical reviewer for accuracy sign-off before publishing.", sal: 2.0, links: [{ t: meridianId, e: "about" }] },
-    { c: "All client communication should go through Lisa unless it's a strategic/pricing discussion, which Marcus handles.", sal: 2.0, links: [{ t: lisaId, e: "about" }, { t: marcusId, e: "about" }] },
-    { c: "When a writer misses a deadline, immediately notify the client through Lisa and offer expedited delivery within 24 hours.", sal: 2.0, links: [{ t: lisaId, e: "about" }] },
-    { c: "Monthly GSC reports must be sent to clients by the 5th of each month. Marcus reviews them before they go out.", sal: 2.0, links: [{ t: gscId, e: "about" }, { t: marcusId, e: "about" }] },
-    { c: "For white-label clients like Canopy Digital, never include any WOBS branding, watermarks, or attribution in the content.", sal: 2.0, links: [{ t: canopyId, e: "about" }] },
+    { c: "Always check AI detection using Originality.ai before submitting content to clients. Score must be above 80% original.", sal: 2.5, scope: 1.0, links: [{ t: originalityId, e: "about" }, { t: wobsId, e: "about" }] },
+    { c: "Every article must score at least 75/100 on Surfer SEO before publishing. If it's below 75, send it back to the writer for optimization.", sal: 2.5, scope: 1.0, links: [{ t: surferId, e: "about" }] },
+    { c: "Never publish an article without Sarah's approval. She must sign off on every piece before it goes live.", sal: 2.5, scope: 1.0, links: [{ t: sarahId, e: "about" }] },
+    { c: "Meridian Health articles require an additional step: after Sarah's review, send the article to Meridian's in-house medical reviewer for accuracy sign-off before publishing.", sal: 2.0, scope: 0.3, links: [{ t: meridianId, e: "about" }] },
+    { c: "All client communication should go through Lisa unless it's a strategic/pricing discussion, which Marcus handles.", sal: 2.0, scope: 0.9, links: [{ t: lisaId, e: "about" }, { t: marcusId, e: "about" }] },
+    { c: "When a writer misses a deadline, immediately notify the client through Lisa and offer expedited delivery within 24 hours.", sal: 2.0, scope: 0.9, links: [{ t: lisaId, e: "about" }] },
+    { c: "Monthly GSC reports must be sent to clients by the 5th of each month. Marcus reviews them before they go out.", sal: 2.0, scope: 0.8, links: [{ t: gscId, e: "about" }, { t: marcusId, e: "about" }] },
+    { c: "For white-label clients like Canopy Digital, never include any WOBS branding, watermarks, or attribution in the content.", sal: 2.0, scope: 0.3, links: [{ t: canopyId, e: "about" }] },
   ];
 
   const instrIds: string[] = [];
   for (const i of instrData) {
-    const id = createNode({ node_type: "fact", subtype: "instruction", content: i.c, salience: i.sal, confidence: 1.0, source: "user", attributes: {} });
+    const id = createNode({ node_type: "instruction", subtype: "instruction", content: i.c, salience: i.sal, confidence: 1.0, source: "user", attributes: {}, scope: i.scope });
     instrIds.push(id);
     for (const link of i.links) createEdge({ source_id: id, target_id: link.t, edge_type: link.e });
   }
 
   // ── Processes / Tool usage ──
   const procData = [
-    { c: "To look up an order in Airtable: Open the WOBS Orders base → go to the 'Active Orders' view → filter by client name. Each row shows: client, article title, assigned writer, deadline, status (Draft/Review/Published). You can also filter by writer name to see their assignments.", sal: 1.8, links: [{ t: airtableId, e: "about" }] },
-    { c: "To create a new article assignment in Airtable: In the 'Active Orders' view → click '+ Add record' → fill in: Client (dropdown), Article Title, Target Keyword, Assigned Writer (dropdown), Deadline, Word Count Target. Status will default to 'Draft'.", sal: 1.5, links: [{ t: airtableId, e: "about" }] },
-    { c: "To update an order status in Airtable: Find the article row → change the Status dropdown from 'Draft' to 'Review' when submitted, 'Review' to 'Published' when live. Add the live URL to the 'Published URL' field.", sal: 1.5, links: [{ t: airtableId, e: "about" }] },
-    { c: "To publish an article on WordPress: Log into the client's WP admin → Posts → Add New → paste the content → set the category and tags → add the featured image → set the SEO meta title and description in Yoast → click 'Publish'. Make sure the permalink slug matches the target keyword.", sal: 1.5, links: [{ t: wordpressId, e: "about" }] },
-    { c: "To run a Surfer SEO check: Open Surfer → Content Editor → paste the target keyword → paste the article text → check the Content Score. Must be 75+ to pass. If below 75, Surfer will suggest missing terms and topics to add. Send suggestions back to the writer.", sal: 1.8, links: [{ t: surferId, e: "about" }] },
-    { c: "To check AI detection with Originality.ai: Go to Originality.ai → Scan → paste the full article text → click 'Scan'. Check the 'Original' percentage. Must be above 80%. If below 80%, the article needs to be rewritten by the writer — do NOT attempt to manually edit it to pass.", sal: 1.8, links: [{ t: originalityId, e: "about" }] },
-    { c: "To pull a GSC report: Open Google Search Console → select the client's property → Performance → set date range to last 30 days → export as CSV. Key metrics: total clicks, impressions, average CTR, average position. Compare to previous month.", sal: 1.5, links: [{ t: gscId, e: "about" }] },
-    { c: "Content creation workflow at WOBS: 1) Lisa creates the assignment in Airtable with keyword and deadline. 2) Writer drafts the article. 3) Writer submits to Sarah for review (status → Review). 4) Sarah checks quality, Surfer score, and Originality score. 5) If passes, Sarah approves and publishes to WordPress. 6) Lisa updates Airtable status to Published.", sal: 1.8, links: [{ t: wobsId, e: "about" }, { t: airtableId, e: "about" }, { t: wordpressId, e: "about" }] },
-    { c: "When dealing with a client complaint: 1) Lisa acknowledges within 2 hours. 2) Lisa investigates — checks the article, who wrote it, what went wrong. 3) Lisa coordinates fix with the writer. 4) If it's a factual error, escalate to Marcus. 5) Fixed article goes through Sarah's review again before re-publishing.", sal: 1.8, links: [{ t: lisaId, e: "about" }, { t: marcusId, e: "about" }] },
-    { c: "To onboard a new client: 1) Marcus signs the contract and sets up billing. 2) Lisa creates the Airtable workspace for the client. 3) Lisa gets WordPress admin credentials from the client. 4) Lisa creates the first month's article assignments in Airtable. 5) Writers start on articles within 3 days of onboarding.", sal: 1.8, links: [{ t: marcusId, e: "about" }, { t: lisaId, e: "about" }, { t: airtableId, e: "about" }] },
+    { c: "To look up an order in Airtable: Open the WOBS Orders base → go to the 'Active Orders' view → filter by client name. Each row shows: client, article title, assigned writer, deadline, status (Draft/Review/Published). You can also filter by writer name to see their assignments.", sal: 1.8, scope: 0.5, links: [{ t: airtableId, e: "about" }] },
+    { c: "To create a new article assignment in Airtable: In the 'Active Orders' view → click '+ Add record' → fill in: Client (dropdown), Article Title, Target Keyword, Assigned Writer (dropdown), Deadline, Word Count Target. Status will default to 'Draft'.", sal: 1.5, scope: 0.5, links: [{ t: airtableId, e: "about" }] },
+    { c: "To update an order status in Airtable: Find the article row → change the Status dropdown from 'Draft' to 'Review' when submitted, 'Review' to 'Published' when live. Add the live URL to the 'Published URL' field.", sal: 1.5, scope: 0.5, links: [{ t: airtableId, e: "about" }] },
+    { c: "To publish an article on WordPress: Log into the client's WP admin → Posts → Add New → paste the content → set the category and tags → add the featured image → set the SEO meta title and description in Yoast → click 'Publish'. Make sure the permalink slug matches the target keyword.", sal: 1.5, scope: 0.5, links: [{ t: wordpressId, e: "about" }] },
+    { c: "To run a Surfer SEO check: Open Surfer → Content Editor → paste the target keyword → paste the article text → check the Content Score. Must be 75+ to pass. If below 75, Surfer will suggest missing terms and topics to add. Send suggestions back to the writer.", sal: 1.8, scope: 0.5, links: [{ t: surferId, e: "about" }] },
+    { c: "To check AI detection with Originality.ai: Go to Originality.ai → Scan → paste the full article text → click 'Scan'. Check the 'Original' percentage. Must be above 80%. If below 80%, the article needs to be rewritten by the writer — do NOT attempt to manually edit it to pass.", sal: 1.8, scope: 0.5, links: [{ t: originalityId, e: "about" }] },
+    { c: "To pull a GSC report: Open Google Search Console → select the client's property → Performance → set date range to last 30 days → export as CSV. Key metrics: total clicks, impressions, average CTR, average position. Compare to previous month.", sal: 1.5, scope: 0.5, links: [{ t: gscId, e: "about" }] },
+    { c: "Content creation workflow at WOBS: 1) Lisa creates the assignment in Airtable with keyword and deadline. 2) Writer drafts the article. 3) Writer submits to Sarah for review (status → Review). 4) Sarah checks quality, Surfer score, and Originality score. 5) If passes, Sarah approves and publishes to WordPress. 6) Lisa updates Airtable status to Published.", sal: 1.8, scope: 0.7, links: [{ t: wobsId, e: "about" }, { t: airtableId, e: "about" }, { t: wordpressId, e: "about" }] },
+    { c: "When dealing with a client complaint: 1) Lisa acknowledges within 2 hours. 2) Lisa investigates — checks the article, who wrote it, what went wrong. 3) Lisa coordinates fix with the writer. 4) If it's a factual error, escalate to Marcus. 5) Fixed article goes through Sarah's review again before re-publishing.", sal: 1.8, scope: 0.7, links: [{ t: lisaId, e: "about" }, { t: marcusId, e: "about" }] },
+    { c: "To onboard a new client: 1) Marcus signs the contract and sets up billing. 2) Lisa creates the Airtable workspace for the client. 3) Lisa gets WordPress admin credentials from the client. 4) Lisa creates the first month's article assignments in Airtable. 5) Writers start on articles within 3 days of onboarding.", sal: 1.8, scope: 0.7, links: [{ t: marcusId, e: "about" }, { t: lisaId, e: "about" }, { t: airtableId, e: "about" }] },
   ];
 
   const procIds: string[] = [];
   for (const p of procData) {
-    const id = createNode({ node_type: "fact", subtype: "tool_usage", content: p.c, salience: p.sal, confidence: 1.0, source: "user", attributes: {} });
+    const id = createNode({ node_type: "instruction", subtype: "tool_usage", content: p.c, salience: p.sal, confidence: 1.0, source: "user", attributes: {}, scope: p.scope });
     procIds.push(id);
     for (const link of p.links) createEdge({ source_id: id, target_id: link.t, edge_type: link.e });
   }
 
   // ── Opinions ──
   const opinData = [
-    { c: "I think Dave needs more training before handling Meridian Health articles — the medical inaccuracy issues are concerning", sal: 0.7, links: [{ t: daveId, e: "about" }, { t: meridianId, e: "about" }] },
-    { c: "Peter is the best writer we have. If we lose him, we're in trouble.", sal: 0.7, links: [{ t: peterId, e: "about" }] },
-    { c: "Canopy Digital might be more trouble than they're worth — the white-label requirement adds complexity and they're paying standard rates", sal: 0.7, links: [{ t: canopyId, e: "about" }] },
-    { c: "We should probably raise prices for healthcare content. The medical review step makes it much more expensive to produce.", sal: 0.7, links: [{ t: meridianId, e: "about" }, { t: wobsId, e: "about" }] },
+    { c: "I think Dave needs more training before handling Meridian Health articles — the medical inaccuracy issues are concerning", sal: 1.0, links: [{ t: daveId, e: "about" }, { t: meridianId, e: "about" }] },
+    { c: "Peter is the best writer we have. If we lose him, we're in trouble.", sal: 1.0, links: [{ t: peterId, e: "about" }] },
+    { c: "Canopy Digital might be more trouble than they're worth — the white-label requirement adds complexity and they're paying standard rates", sal: 1.0, links: [{ t: canopyId, e: "about" }] },
+    { c: "We should probably raise prices for healthcare content. The medical review step makes it much more expensive to produce.", sal: 1.0, links: [{ t: meridianId, e: "about" }, { t: wobsId, e: "about" }] },
   ];
 
   for (const o of opinData) {
@@ -690,8 +690,8 @@ async function seedDb() {
   ];
   for (let i = 0; i < factsData.length; i++) allNodes.push({ id: factIds[i], type: "fact", text: factsData[i].c });
   for (let i = 0; i < eventsData.length; i++) allNodes.push({ id: eventIds[i], type: "event", text: eventsData[i].c });
-  for (let i = 0; i < instrData.length; i++) allNodes.push({ id: instrIds[i], type: "fact", text: instrData[i].c });
-  for (let i = 0; i < procData.length; i++) allNodes.push({ id: procIds[i], type: "fact", text: procData[i].c });
+  for (let i = 0; i < instrData.length; i++) allNodes.push({ id: instrIds[i], type: "instruction", text: instrData[i].c });
+  for (let i = 0; i < procData.length; i++) allNodes.push({ id: procIds[i], type: "instruction", text: procData[i].c });
 
   const texts = allNodes.map((n) => n.text);
   const batchSize = 50;
@@ -899,6 +899,7 @@ console.log(`  ─────────────────────�
 console.log(`  COSTS`);
 console.log(`  L1 tokens:    ${usage.l1_input.toLocaleString()} in / ${usage.l1_output.toLocaleString()} out → $${costs.l1_cost.toFixed(4)}`);
 console.log(`  L2 tokens:    ${usage.l2_input.toLocaleString()} in / ${usage.l2_output.toLocaleString()} out → $${costs.l2_cost.toFixed(4)}`);
+console.log(`  Curate tkns:  ${usage.curate_input.toLocaleString()} in / ${usage.curate_output.toLocaleString()} out → $${costs.curate_cost.toFixed(4)}`);
 console.log(`  Embed tokens: ${usage.embedding_tokens.toLocaleString()} → $${costs.embedding_cost.toFixed(4)}`);
 console.log(`  Total cost:   $${costs.total_cost.toFixed(4)}`);
 console.log(`══════════════════════════════════════════════════════════\n`);

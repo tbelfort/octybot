@@ -1,2 +1,8 @@
 .env
+.envrc
 node_modules/
+CORE/
+memory/
+*.db
+*.db-shm
+*.db-wal
