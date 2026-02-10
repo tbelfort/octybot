@@ -386,6 +386,7 @@ console.log(`  ─────────────────────�
 console.log(`  COSTS`);
 console.log(`  L1 tokens:    0 (no L1 layer)`);
 console.log(`  L2 tokens:    ${usage.l2_input.toLocaleString()} in / ${usage.l2_output.toLocaleString()} out → $${costs.l2_cost.toFixed(4)}`);
+console.log(`  Curate tkns:  ${usage.curate_input.toLocaleString()} in / ${usage.curate_output.toLocaleString()} out → $${costs.curate_cost.toFixed(4)}`);
 console.log(`  Embed tokens: ${usage.embedding_tokens.toLocaleString()} → $${costs.embedding_cost.toFixed(4)}`);
 console.log(`  Total cost:   $${costs.total_cost.toFixed(4)}`);
 console.log(`══════════════════════════════════════════════════════════\n`);

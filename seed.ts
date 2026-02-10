@@ -173,9 +173,9 @@ const facts: Array<{ content: string; subtype: string; salience: number; links: 
     links: [{ target: jamesId, edge: "about" }] },
 
   // Business facts
-  { content: "WOBS total monthly revenue is approximately £12,600 across all four clients", subtype: "definitional", salience: 1.2,
+  { content: "WOBS total monthly revenue is approximately £12,600 across all four clients", subtype: "definitional", salience: 1.0,
     links: [{ target: wobsId, edge: "about" }] },
-  { content: "WOBS charges £200 per article for standard content and £400 per article for medical/healthcare content", subtype: "definitional", salience: 1.2,
+  { content: "WOBS charges £200 per article for standard content and £400 per article for medical/healthcare content", subtype: "definitional", salience: 1.0,
     links: [{ target: wobsId, edge: "about" }] },
   { content: "Meridian Health articles require an additional medical accuracy review step that other clients don't need", subtype: "conditional", salience: 0.9,
     links: [{ target: meridianId, edge: "about" }] },
@@ -242,30 +242,31 @@ console.log(`Created ${events.length} events`);
 
 // ── Instructions ─────────────────────────────────────────────────────
 
-const instructions: Array<{ content: string; subtype: string; salience: number; links: Array<{ target: string; edge: string }> }> = [
-  { content: "Always check AI detection using Originality.ai before submitting content to clients. Score must be above 80% original.", subtype: "instruction", salience: 2.5,
+const instructions: Array<{ content: string; subtype: string; salience: number; scope: number; links: Array<{ target: string; edge: string }> }> = [
+  { content: "Always check AI detection using Originality.ai before submitting content to clients. Score must be above 80% original.", subtype: "instruction", salience: 2.5, scope: 1.0,
     links: [{ target: originalityId, edge: "about" }, { target: wobsId, edge: "about" }] },
-  { content: "Every article must score at least 75/100 on Surfer SEO before publishing. If it's below 75, send it back to the writer for optimization.", subtype: "instruction", salience: 2.5,
+  { content: "Every article must score at least 75/100 on Surfer SEO before publishing. If it's below 75, send it back to the writer for optimization.", subtype: "instruction", salience: 2.5, scope: 1.0,
     links: [{ target: surferId, edge: "about" }] },
-  { content: "Never publish an article without Sarah's approval. She must sign off on every piece before it goes live.", subtype: "instruction", salience: 2.5,
+  { content: "Never publish an article without Sarah's approval. She must sign off on every piece before it goes live.", subtype: "instruction", salience: 2.5, scope: 1.0,
     links: [{ target: sarahId, edge: "about" }] },
-  { content: "Meridian Health articles require an additional step: after Sarah's review, send the article to Meridian's in-house medical reviewer for accuracy sign-off before publishing.", subtype: "instruction", salience: 2.0,
+  { content: "Meridian Health articles require an additional step: after Sarah's review, send the article to Meridian's in-house medical reviewer for accuracy sign-off before publishing.", subtype: "instruction", salience: 2.0, scope: 0.3,
     links: [{ target: meridianId, edge: "about" }] },
-  { content: "All client communication should go through Lisa unless it's a strategic/pricing discussion, which Marcus handles.", subtype: "instruction", salience: 2.0,
+  { content: "All client communication should go through Lisa unless it's a strategic/pricing discussion, which Marcus handles.", subtype: "instruction", salience: 2.0, scope: 0.9,
     links: [{ target: lisaId, edge: "about" }, { target: marcusId, edge: "about" }] },
-  { content: "When a writer misses a deadline, immediately notify the client through Lisa and offer expedited delivery within 24 hours.", subtype: "instruction", salience: 2.0,
+  { content: "When a writer misses a deadline, immediately notify the client through Lisa and offer expedited delivery within 24 hours.", subtype: "instruction", salience: 2.0, scope: 0.9,
     links: [{ target: lisaId, edge: "about" }] },
-  { content: "Monthly GSC reports must be sent to clients by the 5th of each month. Marcus reviews them before they go out.", subtype: "instruction", salience: 2.0,
+  { content: "Monthly GSC reports must be sent to clients by the 5th of each month. Marcus reviews them before they go out.", subtype: "instruction", salience: 2.0, scope: 0.8,
     links: [{ target: gscId, edge: "about" }, { target: marcusId, edge: "about" }] },
-  { content: "For white-label clients like Canopy Digital, never include any WOBS branding, watermarks, or attribution in the content.", subtype: "instruction", salience: 2.0,
+  { content: "For white-label clients like Canopy Digital, never include any WOBS branding, watermarks, or attribution in the content.", subtype: "instruction", salience: 2.0, scope: 0.3,
     links: [{ target: canopyId, edge: "about" }] },
 ];
 
 const instrIds: string[] = [];
 for (const instr of instructions) {
   const id = createNode({
-    node_type: "fact", subtype: instr.subtype, content: instr.content,
+    node_type: "instruction", subtype: instr.subtype, content: instr.content,
     salience: instr.salience, confidence: 1.0, source: "user", attributes: {},
+    scope: instr.scope,
   });
   instrIds.push(id);
   for (const link of instr.links) {
@@ -276,34 +277,35 @@ console.log(`Created ${instructions.length} instructions`);
 
 // ── Tool Usage / Processes ───────────────────────────────────────────
 
-const processes: Array<{ content: string; salience: number; links: Array<{ target: string; edge: string }> }> = [
-  { content: "To look up an order in Airtable: Open the WOBS Orders base → go to the 'Active Orders' view → filter by client name. Each row shows: client, article title, assigned writer, deadline, status (Draft/Review/Published). You can also filter by writer name to see their assignments.", salience: 1.8,
+const processes: Array<{ content: string; salience: number; scope: number; links: Array<{ target: string; edge: string }> }> = [
+  { content: "To look up an order in Airtable: Open the WOBS Orders base → go to the 'Active Orders' view → filter by client name. Each row shows: client, article title, assigned writer, deadline, status (Draft/Review/Published). You can also filter by writer name to see their assignments.", salience: 1.8, scope: 0.5,
     links: [{ target: airtableId, edge: "about" }] },
-  { content: "To create a new article assignment in Airtable: In the 'Active Orders' view → click '+ Add record' → fill in: Client (dropdown), Article Title, Target Keyword, Assigned Writer (dropdown), Deadline, Word Count Target. Status will default to 'Draft'.", salience: 1.5,
+  { content: "To create a new article assignment in Airtable: In the 'Active Orders' view → click '+ Add record' → fill in: Client (dropdown), Article Title, Target Keyword, Assigned Writer (dropdown), Deadline, Word Count Target. Status will default to 'Draft'.", salience: 1.5, scope: 0.5,
     links: [{ target: airtableId, edge: "about" }] },
-  { content: "To update an order status in Airtable: Find the article row → change the Status dropdown from 'Draft' to 'Review' when submitted, 'Review' to 'Published' when live. Add the live URL to the 'Published URL' field.", salience: 1.5,
+  { content: "To update an order status in Airtable: Find the article row → change the Status dropdown from 'Draft' to 'Review' when submitted, 'Review' to 'Published' when live. Add the live URL to the 'Published URL' field.", salience: 1.5, scope: 0.5,
     links: [{ target: airtableId, edge: "about" }] },
-  { content: "To publish an article on WordPress: Log into the client's WP admin → Posts → Add New → paste the content → set the category and tags → add the featured image → set the SEO meta title and description in Yoast → click 'Publish'. Make sure the permalink slug matches the target keyword.", salience: 1.5,
+  { content: "To publish an article on WordPress: Log into the client's WP admin → Posts → Add New → paste the content → set the category and tags → add the featured image → set the SEO meta title and description in Yoast → click 'Publish'. Make sure the permalink slug matches the target keyword.", salience: 1.5, scope: 0.5,
     links: [{ target: wordpressId, edge: "about" }] },
-  { content: "To run a Surfer SEO check: Open Surfer → Content Editor → paste the target keyword → paste the article text → check the Content Score. Must be 75+ to pass. If below 75, Surfer will suggest missing terms and topics to add. Send suggestions back to the writer.", salience: 1.8,
+  { content: "To run a Surfer SEO check: Open Surfer → Content Editor → paste the target keyword → paste the article text → check the Content Score. Must be 75+ to pass. If below 75, Surfer will suggest missing terms and topics to add. Send suggestions back to the writer.", salience: 1.8, scope: 0.5,
     links: [{ target: surferId, edge: "about" }] },
-  { content: "To check AI detection with Originality.ai: Go to Originality.ai → Scan → paste the full article text → click 'Scan'. Check the 'Original' percentage. Must be above 80%. If below 80%, the article needs to be rewritten by the writer — do NOT attempt to manually edit it to pass.", salience: 1.8,
+  { content: "To check AI detection with Originality.ai: Go to Originality.ai → Scan → paste the full article text → click 'Scan'. Check the 'Original' percentage. Must be above 80%. If below 80%, the article needs to be rewritten by the writer — do NOT attempt to manually edit it to pass.", salience: 1.8, scope: 0.5,
     links: [{ target: originalityId, edge: "about" }] },
-  { content: "To pull a GSC report: Open Google Search Console → select the client's property → Performance → set date range to last 30 days → export as CSV. Key metrics: total clicks, impressions, average CTR, average position. Compare to previous month.", salience: 1.5,
+  { content: "To pull a GSC report: Open Google Search Console → select the client's property → Performance → set date range to last 30 days → export as CSV. Key metrics: total clicks, impressions, average CTR, average position. Compare to previous month.", salience: 1.5, scope: 0.5,
     links: [{ target: gscId, edge: "about" }] },
-  { content: "Content creation workflow at WOBS: 1) Lisa creates the assignment in Airtable with keyword and deadline. 2) Writer drafts the article. 3) Writer submits to Sarah for review (status → Review). 4) Sarah checks quality, Surfer score, and Originality score. 5) If passes, Sarah approves and publishes to WordPress. 6) Lisa updates Airtable status to Published.", salience: 1.8,
+  { content: "Content creation workflow at WOBS: 1) Lisa creates the assignment in Airtable with keyword and deadline. 2) Writer drafts the article. 3) Writer submits to Sarah for review (status → Review). 4) Sarah checks quality, Surfer score, and Originality score. 5) If passes, Sarah approves and publishes to WordPress. 6) Lisa updates Airtable status to Published.", salience: 1.8, scope: 0.7,
     links: [{ target: wobsId, edge: "about" }, { target: airtableId, edge: "about" }, { target: wordpressId, edge: "about" }] },
-  { content: "When dealing with a client complaint: 1) Lisa acknowledges within 2 hours. 2) Lisa investigates — checks the article, who wrote it, what went wrong. 3) Lisa coordinates fix with the writer. 4) If it's a factual error, escalate to Marcus. 5) Fixed article goes through Sarah's review again before re-publishing.", salience: 1.8,
+  { content: "When dealing with a client complaint: 1) Lisa acknowledges within 2 hours. 2) Lisa investigates — checks the article, who wrote it, what went wrong. 3) Lisa coordinates fix with the writer. 4) If it's a factual error, escalate to Marcus. 5) Fixed article goes through Sarah's review again before re-publishing.", salience: 1.8, scope: 0.7,
     links: [{ target: lisaId, edge: "about" }, { target: marcusId, edge: "about" }] },
-  { content: "To onboard a new client: 1) Marcus signs the contract and sets up billing. 2) Lisa creates the Airtable workspace for the client. 3) Lisa gets WordPress admin credentials from the client. 4) Lisa creates the first month's article assignments in Airtable. 5) Writers start on articles within 3 days of onboarding.", salience: 1.8,
+  { content: "To onboard a new client: 1) Marcus signs the contract and sets up billing. 2) Lisa creates the Airtable workspace for the client. 3) Lisa gets WordPress admin credentials from the client. 4) Lisa creates the first month's article assignments in Airtable. 5) Writers start on articles within 3 days of onboarding.", salience: 1.8, scope: 0.7,
     links: [{ target: marcusId, edge: "about" }, { target: lisaId, edge: "about" }, { target: airtableId, edge: "about" }] },
 ];
 
 const processIds: string[] = [];
 for (const p of processes) {
   const id = createNode({
-    node_type: "fact", subtype: "tool_usage", content: p.content,
+    node_type: "instruction", subtype: "tool_usage", content: p.content,
     salience: p.salience, confidence: 1.0, source: "user", attributes: {},
+    scope: p.scope,
   });
   processIds.push(id);
   for (const link of p.links) {
@@ -315,13 +317,13 @@ console.log(`Created ${processes.length} tool usage / processes`);
 // ── Opinions ─────────────────────────────────────────────────────────
 
 const opinions: Array<{ content: string; salience: number; links: Array<{ target: string; edge: string }> }> = [
-  { content: "I think Dave needs more training before handling Meridian Health articles — the medical inaccuracy issues are concerning", salience: 0.7,
+  { content: "I think Dave needs more training before handling Meridian Health articles — the medical inaccuracy issues are concerning", salience: 1.0,
     links: [{ target: daveId, edge: "about" }, { target: meridianId, edge: "about" }] },
-  { content: "Peter is the best writer we have. If we lose him, we're in trouble.", salience: 0.7,
+  { content: "Peter is the best writer we have. If we lose him, we're in trouble.", salience: 1.0,
     links: [{ target: peterId, edge: "about" }] },
-  { content: "Canopy Digital might be more trouble than they're worth — the white-label requirement adds complexity and they're paying standard rates", salience: 0.7,
+  { content: "Canopy Digital might be more trouble than they're worth — the white-label requirement adds complexity and they're paying standard rates", salience: 1.0,
     links: [{ target: canopyId, edge: "about" }] },
-  { content: "We should probably raise prices for healthcare content. The medical review step makes it much more expensive to produce.", salience: 0.7,
+  { content: "We should probably raise prices for healthcare content. The medical review step makes it much more expensive to produce.", salience: 1.0,
     links: [{ target: meridianId, edge: "about" }, { target: wobsId, edge: "about" }] },
 ];
 
@@ -423,10 +425,10 @@ for (let i = 0; i < events.length; i++) {
   allNodes.push({ id: eventIds[i], type: "event", text: events[i].content });
 }
 for (let i = 0; i < instructions.length; i++) {
-  allNodes.push({ id: instrIds[i], type: "fact", text: instructions[i].content });
+  allNodes.push({ id: instrIds[i], type: "instruction", text: instructions[i].content });
 }
 for (let i = 0; i < processes.length; i++) {
-  allNodes.push({ id: processIds[i], type: "fact", text: processes[i].content });
+  allNodes.push({ id: processIds[i], type: "instruction", text: processes[i].content });
 }
 
 // Batch embed (API supports up to 128 texts)
