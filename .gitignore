@@ -2,7 +2,7 @@
 .envrc
 node_modules/
 CORE/
-memory/
+memory/hooks/
 *.db
 *.db-shm
 *.db-wal

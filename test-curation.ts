@@ -70,7 +70,7 @@ const ALL_QUERIES = [
   { id: "R22", prompt: "Has Dave been having any problems lately?", expected: ["missed", "Brightwell", "medical inaccuracy"] },
 { id: "R24", prompt: "What are the rules for submitting content?", expected: ["Originality", "Surfer", "Sarah"] },
   { id: "R25", prompt: "What extra steps do Meridian Health articles need?", expected: ["medical", "review", "sign-off"] },
-  { id: "R26", prompt: "What should I remember about white-label content?", expected: ["branding", "Canopy"] },
+  { id: "R26", prompt: "I'm writing an article for Canopy Digital — are there any special rules?", expected: ["branding", "white-label"] },
   { id: "R27", prompt: "What happens when a writer misses a deadline?", expected: ["Lisa", "24 hours"] },
   { id: "R28", prompt: "When are GSC reports due?", expected: ["5th", "Marcus"] },
   { id: "R29", prompt: "Is Peter faster than Dave?", expected: ["8 article", "4 article"] },
@@ -118,7 +118,7 @@ async function curateWithOSS(prompt: string, greedyContext: string): Promise<Cur
   const response = await callWorkersAI(LAYER2_MODEL, [
     { role: "system", content: CURATION_SYSTEM_PROMPT },
     { role: "user", content: `Query: "${prompt}"\n\nRecords:\n${greedyContext}` },
-  ], { max_tokens: 2048, temperature: 0.1, tag: "l2" });
+  ], { temperature: 0.1, tag: "curate" });
   const usageAfter = getUsage();
   const raw = response.content || "";
   const output = raw === "NO_RELEVANT_RECORDS" ? "" : raw;
@@ -202,7 +202,7 @@ async function main() {
 
   // Default: Sonnet at all 3 effort levels. Override with --models flag.
   // Supported: oss, sonnet, opus, sonnet-low, sonnet-med, sonnet-high, opus-low, opus-med, opus-high
-  const enabledModels = modelArg.length > 0 ? modelArg : ["sonnet-low"];
+  const enabledModels = modelArg.length > 0 ? modelArg : ["oss"];
   for (const m of enabledModels) {
     if (m === "oss") curators["OSS-120B"] = curateWithOSS;
     else if (m === "sonnet") curators["Sonnet"] = createClaudeCurator("sonnet");
@@ -243,43 +243,28 @@ async function main() {
   console.log(`Queries: ${queries.length}${queryLabel}\n`);
 
   const results: QueryResult[] = [];
-  const BATCH_SIZE = 8;
+  const BATCH_SIZE = 24;
 
   async function runQuery(q: typeof queries[0]): Promise<QueryResult> {
-    // Phase 1: Retrieval — pipeline returns curated context directly
+    // Run the REAL pipeline: L1 → L1.5 → L2 retrieval → per-section curation
     const l1c = await classify(q.prompt);
     const l1 = { ...l1c.result, operations: { retrieve: true, store: false } };
     const retrieveResult = await retrieveLoop(q.prompt, l1);
     const greedyContext = retrieveResult.context;
+    const curatedOutput = retrieveResult.curatedContext;
 
-    // Phase 2: Run all curators on the greedy context (in parallel)
-    const curatorResults: Record<string, CuratorScore> = {};
-    const curatorPromises = curatorNames.map(async (name) => {
-      const curate = curators[name];
-      try {
-        const result = await curate(q.prompt, greedyContext);
-        const score = scoreContext(result.output, q.expected);
-        const hitRate = Math.round((score.hits.length / q.expected.length) * 100);
-        const failures = score.misses.map((exp) => ({
-          expected: exp, cause: "miss" as const,
-        }));
-        curatorResults[name] = {
-          name, output: result.output, chars: result.output.length,
-          duration_ms: result.duration_ms, cost_usd: result.cost_usd,
-          input_tokens: result.input_tokens, output_tokens: result.output_tokens,
-          model_usage: result.model_usage,
-          ...score, hitRate, failures,
-        };
-      } catch (err: any) {
-        curatorResults[name] = {
-          name, output: "", chars: 0, duration_ms: 0, cost_usd: 0,
-          input_tokens: 0, output_tokens: 0,
-          hits: [], misses: q.expected, hitRate: 0,
-          failures: q.expected.map((e) => ({ expected: e, cause: "miss" as const })),
-        };
-      }
-    });
-    await Promise.all(curatorPromises);
+    // Score the real pipeline output
+    const score = scoreContext(curatedOutput, q.expected);
+    const hitRate = Math.round((score.hits.length / q.expected.length) * 100);
+    const curatorResults: Record<string, CuratorScore> = {
+      "OSS-120B": {
+        name: "OSS-120B", output: curatedOutput, chars: curatedOutput.length,
+        duration_ms: retrieveResult.timing?.curate_ms ?? 0, cost_usd: 0,
+        input_tokens: 0, output_tokens: 0,
+        ...score, hitRate,
+        failures: score.misses.map((exp) => ({ expected: exp, cause: "miss" as const })),
+      },
+    };
 
     return {
       id: q.id, prompt: q.prompt, expected: q.expected,
