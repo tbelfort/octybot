@@ -517,10 +517,37 @@ export async function handleToolCall(
         return `Error: type must be one of: ${validTypes.join(", ")}. Got: ${JSON.stringify(nodeType)}`;
       if (!content)
         return "Error: content is required and must be non-empty.";
-      // Reject garbled LLM output (e.g. "I want ... ... ... ... ...")
+      // Reject garbled LLM output
       const stripped = content.replace(/[.\s]/g, "");
       if (stripped.length < content.length * 0.3)
         return `Error: content looks garbled (too much padding/ellipsis). Got: "${content.slice(0, 80)}"`;
+      // Reject repeated word patterns (e.g. "the the the the")
+      const words = content.split(/\s+/);
+      if (words.length >= 4) {
+        const wordCounts = new Map<string, number>();
+        for (const w of words) wordCounts.set(w.toLowerCase(), (wordCounts.get(w.toLowerCase()) ?? 0) + 1);
+        const maxRepeat = Math.max(...wordCounts.values());
+        if (maxRepeat > words.length * 0.5)
+          return `Error: content has excessive word repetition. Got: "${content.slice(0, 80)}"`;
+      }
+      // Reject content that's too short to be meaningful (entities/opinions exempt)
+      if (content.length < 10 && !["entity"].includes(nodeType))
+        return `Error: content too short to be meaningful (${content.length} chars). Got: "${content}"`;
+      // Validate scope is 0-1 for instructions/plans
+      if (args.scope != null) {
+        const scope = args.scope as number;
+        if (typeof scope !== "number" || scope < 0 || scope > 1)
+          return `Error: scope must be between 0 and 1. Got: ${scope}`;
+      }
+      // Validate valid_from is a valid ISO date for plans
+      if (nodeType === "plan" && args.valid_from) {
+        const vf = args.valid_from as string;
+        if (!/^\d{4}-\d{2}-\d{2}/.test(vf) || isNaN(new Date(vf).getTime()))
+          return `Error: valid_from must be a valid ISO date (YYYY-MM-DD). Got: "${vf}"`;
+      }
+      // Dedup entity_ids
+      const rawEntityIds = (args.entity_ids as string[]) ?? [];
+      const dedupedEntityIds = [...new Set(rawEntityIds)];
       const nodeId = createNode({
         node_type: nodeType as MemoryNode["node_type"],
         subtype: args.subtype as string | undefined,
@@ -532,10 +559,9 @@ export async function handleToolCall(
         scope: args.scope as number | undefined,
         valid_from: args.valid_from as string | undefined,
       });
-      // Create edges to entities
-      const entityIds = (args.entity_ids as string[]) ?? [];
+      // Create edges to entities (using deduped IDs)
       const edgeType = (args.edge_type as string) ?? "about";
-      for (const eid of entityIds) {
+      for (const eid of dedupedEntityIds) {
         createEdge({
           source_id: nodeId,
           target_id: eid,

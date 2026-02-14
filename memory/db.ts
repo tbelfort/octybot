@@ -167,6 +167,14 @@ export function createEdge(
   edge: Omit<Edge, "id" | "created_at">
 ): string {
   const db = getDb();
+  // Verify both nodes exist before creating edge
+  const sourceExists = db.prepare("SELECT 1 FROM nodes WHERE id = ?").get(edge.source_id);
+  const targetExists = db.prepare("SELECT 1 FROM nodes WHERE id = ?").get(edge.target_id);
+  if (!sourceExists || !targetExists) {
+    const missing = !sourceExists ? edge.source_id : edge.target_id;
+    console.error(`[db] Skipping edge creation: node ${missing} not found`);
+    return "";
+  }
   const id = uuid();
   db.prepare(
     `INSERT INTO edges (id, source_id, target_id, edge_type, attributes)
@@ -275,22 +283,6 @@ export function getFactsByEntity(entityId: string): MemoryNode[] {
   return rows.map(parseNode);
 }
 
-/** Get all non-entity nodes connected to an entity (facts, opinions, instructions, events) */
-export function getNodesByEntity(entityId: string): MemoryNode[] {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT DISTINCT n.* FROM nodes n
-       JOIN edges e ON (e.target_id = n.id OR e.source_id = n.id)
-       WHERE n.node_type != 'entity'
-         AND n.superseded_by IS NULL
-         AND (e.source_id = ? OR e.target_id = ?)
-       ORDER BY n.salience DESC`
-    )
-    .all(entityId, entityId) as Record<string, unknown>[];
-  return rows.map(parseNode);
-}
-
 export function getRecentEventIds(days: number): string[] {
   const db = getDb();
   const rows = db.prepare(
@@ -372,16 +364,18 @@ export function getInstructions(topic?: string): MemoryNode[] {
   return rows.map(parseNode);
 }
 
-export function getGlobalInstructions(): MemoryNode[] {
+export function getGlobalInstructions(limit: number = 20): MemoryNode[] {
   const db = getDb();
   const rows = db
     .prepare(
       `SELECT * FROM nodes
        WHERE node_type = 'instruction'
          AND scope >= 0.8
-         AND superseded_by IS NULL`
+         AND superseded_by IS NULL
+       ORDER BY scope DESC, salience DESC
+       LIMIT ?`
     )
-    .all() as Record<string, unknown>[];
+    .all(limit) as Record<string, unknown>[];
   return rows.map(parseNode);
 }
 
@@ -419,6 +413,15 @@ export function supersedeNode(oldId: string, newContent: string): string {
   const oldNode = getNode(oldId);
   if (!oldNode) throw new Error(`Node ${oldId} not found`);
 
+  // Validate replacement content isn't garbled
+  const stripped = newContent.replace(/[.\s]/g, "");
+  if (stripped.length < newContent.length * 0.3) {
+    throw new Error(`Replacement content looks garbled: "${newContent.slice(0, 80)}"`);
+  }
+  if (newContent.trim().length < 10 && oldNode.node_type !== "entity") {
+    throw new Error(`Replacement content too short: "${newContent}"`);
+  }
+
   // Create replacement node
   const newId = createNode({
     node_type: oldNode.node_type,
@@ -437,7 +440,8 @@ export function supersedeNode(oldId: string, newContent: string): string {
     oldId
   );
 
-  // Copy edges to new node (deduplicate self-referential edges)
+  // Copy edges to new node — deduplicate by (target, edge_type) pair to prevent
+  // duplicate edges when old node had both in/out edges to the same target
   const outEdges = db
     .prepare("SELECT * FROM edges WHERE source_id = ?")
     .all(oldId) as Record<string, unknown>[];
@@ -446,15 +450,21 @@ export function supersedeNode(oldId: string, newContent: string): string {
     .all(oldId) as Record<string, unknown>[];
 
   const seenEdgeIds = new Set<string>();
+  const seenTargets = new Set<string>(); // "targetId:edgeType" dedup key
 
   for (const edge of outEdges) {
     const eid = edge.id as string;
     if (seenEdgeIds.has(eid)) continue;
     seenEdgeIds.add(eid);
+    const targetId = edge.target_id as string;
+    const edgeType = edge.edge_type as string;
+    const dedupKey = `${targetId}:${edgeType}`;
+    if (seenTargets.has(dedupKey)) continue;
+    seenTargets.add(dedupKey);
     createEdge({
       source_id: newId,
-      target_id: edge.target_id as string,
-      edge_type: edge.edge_type as string,
+      target_id: targetId,
+      edge_type: edgeType,
       attributes: JSON.parse((edge.attributes as string) || "{}"),
     });
   }
@@ -463,10 +473,15 @@ export function supersedeNode(oldId: string, newContent: string): string {
     const eid = edge.id as string;
     if (seenEdgeIds.has(eid)) continue;
     seenEdgeIds.add(eid);
+    const sourceId = edge.source_id as string;
+    const edgeType = edge.edge_type as string;
+    const dedupKey = `${sourceId}:${edgeType}`;
+    if (seenTargets.has(dedupKey)) continue;
+    seenTargets.add(dedupKey);
     createEdge({
-      source_id: edge.source_id as string,
+      source_id: sourceId,
       target_id: newId,
-      edge_type: edge.edge_type as string,
+      edge_type: edgeType,
       attributes: JSON.parse((edge.attributes as string) || "{}"),
     });
   }

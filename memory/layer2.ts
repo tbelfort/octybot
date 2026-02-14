@@ -467,8 +467,8 @@ Execute this search plan. Call "done" when you have finished searching.`;
       }).filter(Boolean);
       if (lines.length > 0) {
         turns.push({
-          tool_call: { name: "search_facts", arguments: { query: prompt } },
-          result: { name: "search_facts", result: lines.join("\n") },
+          tool_call: { name: "broad_search", arguments: { query: prompt } },
+          result: { name: "broad_search", result: lines.join("\n") },
         });
       }
     }
@@ -995,7 +995,9 @@ export async function followUpPipeline(
   if (uncoveredTypes.length > 0 && turns.length > 0) {
     const queryText = analysis.resolved_prompt || prompt;
     const queryVec = (await embed([queryText], "query"))[0];
-    const broadResults = searchSimilar(queryVec, 10, { nodeTypes: uncoveredTypes });
+    // Scale result count with number of uncovered types (5 per type, min 10)
+    const broadCount = Math.max(10, uncoveredTypes.length * 5);
+    const broadResults = searchSimilar(queryVec, broadCount, { nodeTypes: uncoveredTypes });
     const MIN_SCORE = 0.25;
     const relevant = broadResults.filter(r => r.score >= MIN_SCORE);
     if (relevant.length > 0) {
