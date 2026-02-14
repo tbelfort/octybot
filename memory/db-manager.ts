@@ -10,6 +10,7 @@ import {
 } from "fs";
 import { basename, dirname, join } from "path";
 import { Database } from "bun:sqlite";
+import { DB_PATH, PROFILES_DIR, SNAPSHOTS_DIR } from "./config";
 
 interface ActiveState {
   current_profile: string | null;
@@ -23,21 +24,17 @@ interface GraphCounts {
   embeddings: number;
 }
 
-const HOME = process.env.HOME || "~";
-const OCTYBOT_DIR = join(HOME, ".octybot", "test");
-const PROFILE_DIR = join(OCTYBOT_DIR, "profiles");
-const SNAPSHOT_DIR = join(OCTYBOT_DIR, "snapshots");
-const ACTIVE_DB_PATH = join(OCTYBOT_DIR, "memory.db");
-const ACTIVE_STATE_FILE = join(OCTYBOT_DIR, "memory-profile-state.json");
+const ACTIVE_DB_PATH = DB_PATH;
+const ACTIVE_STATE_FILE = join(dirname(DB_PATH), "memory-profile-state.json");
 
 const SMALL_PROFILE = "small-baseline";
 const NOISY_PROFILE = "noisy-large";
-const NOISY_GRAPH_DB_PATH = join(OCTYBOT_DIR, "memory-noisy-large.db");
+const NOISY_GRAPH_DB_PATH = join(dirname(DB_PATH), "memory-noisy-large.db");
 
 function ensureDirs() {
-  mkdirSync(OCTYBOT_DIR, { recursive: true });
-  mkdirSync(PROFILE_DIR, { recursive: true });
-  mkdirSync(SNAPSHOT_DIR, { recursive: true });
+  mkdirSync(dirname(DB_PATH), { recursive: true });
+  mkdirSync(PROFILES_DIR, { recursive: true });
+  mkdirSync(SNAPSHOTS_DIR, { recursive: true });
 }
 
 function defaultState(): ActiveState {
@@ -128,13 +125,13 @@ function readGraphCounts(dbPath: string): GraphCounts | null {
 }
 
 function profilePath(name: string): string {
-  return join(PROFILE_DIR, `${name}.db`);
+  return join(PROFILES_DIR, `${name}.db`);
 }
 
 function listProfileNames(): string[] {
-  if (!existsSync(PROFILE_DIR)) return [];
+  if (!existsSync(PROFILES_DIR)) return [];
   const names: string[] = [];
-  for (const file of readdirSync(PROFILE_DIR)) {
+  for (const file of readdirSync(PROFILES_DIR)) {
     if (!file.endsWith(".db")) continue;
     names.push(basename(file, ".db"));
   }
@@ -152,7 +149,7 @@ function saveProfile(name: string, srcPath: string) {
 }
 
 function snapshotFilePath(profile: string, snapshot: string): string {
-  return join(SNAPSHOT_DIR, profile, `${snapshot}.db`);
+  return join(SNAPSHOTS_DIR, profile, `${snapshot}.db`);
 }
 
 function resolveSnapshotPath(profile: string, snapshot: string): string | null {
@@ -252,7 +249,7 @@ function cmdFreeze(snapshotRaw: string, profileRaw?: string) {
 }
 
 function listSnapshotNames(profile: string): string[] {
-  const dir = join(SNAPSHOT_DIR, profile);
+  const dir = join(SNAPSHOTS_DIR, profile);
   if (!existsSync(dir)) return [];
   const names: string[] = [];
   for (const file of readdirSync(dir)) {
@@ -327,6 +324,69 @@ function cmdInitProfiles() {
     readGraphCounts(profilePath(SMALL_PROFILE)),
     profilePath(SMALL_PROFILE)
   );
+}
+
+function cmdSearch(queryParts: string[]) {
+  const query = queryParts.join(" ").trim();
+  if (!query) throw new Error("Usage: search <query text>");
+  if (!existsSync(ACTIVE_DB_PATH)) throw new Error(`No active DB at ${ACTIVE_DB_PATH}`);
+
+  const db = new Database(ACTIVE_DB_PATH);
+  db.exec("PRAGMA busy_timeout = 3000");
+
+  // Search by content using LIKE with each word
+  const words = query.split(/\s+/).filter(w => w.length > 1);
+  const conditions = words.map(() => "LOWER(n.content) LIKE ?");
+  const params = words.map(w => `%${w.toLowerCase()}%`);
+
+  const sql = `SELECT n.id, n.node_type, n.subtype, n.content, n.created_at
+    FROM nodes n
+    WHERE ${conditions.join(" AND ")}
+      AND n.superseded_by IS NULL
+    ORDER BY n.created_at DESC
+    LIMIT 20`;
+
+  const rows = db.prepare(sql).all(...params) as Array<{
+    id: string; node_type: string; subtype: string | null; content: string; created_at: string;
+  }>;
+  db.close();
+
+  if (rows.length === 0) {
+    console.log(`No nodes found matching: "${query}"`);
+    return;
+  }
+
+  console.log(`Found ${rows.length} node(s) matching "${query}":\n`);
+  for (const row of rows) {
+    const type = row.subtype ? `${row.node_type}/${row.subtype}` : row.node_type;
+    console.log(`  [${type}] ${row.content}`);
+    console.log(`    id: ${row.id} | created: ${row.created_at}`);
+    console.log();
+  }
+}
+
+function cmdDelete(nodeIds: string[]) {
+  if (nodeIds.length === 0) throw new Error("Usage: delete <node-id> [node-id ...]");
+  if (!existsSync(ACTIVE_DB_PATH)) throw new Error(`No active DB at ${ACTIVE_DB_PATH}`);
+
+  const db = new Database(ACTIVE_DB_PATH);
+  db.exec("PRAGMA busy_timeout = 3000");
+
+  let deleted = 0;
+  for (const id of nodeIds) {
+    const node = db.query("SELECT id, node_type, substr(content, 1, 80) as content FROM nodes WHERE id = ?").get(id) as { id: string; node_type: string; content: string } | null;
+    if (!node) {
+      console.log(`  skip: ${id} (not found)`);
+      continue;
+    }
+    db.run("DELETE FROM edges WHERE source_id = ? OR target_id = ?", id, id);
+    db.run("DELETE FROM embeddings WHERE node_id = ?", id);
+    db.run("DELETE FROM nodes WHERE id = ?", id);
+    console.log(`  deleted: [${node.node_type}] ${node.content}`);
+    deleted++;
+  }
+  db.close();
+  console.log(`\nDeleted ${deleted}/${nodeIds.length} node(s).`);
 }
 
 function cmdBuildNoisyLarge() {
@@ -408,16 +468,18 @@ function printHelp() {
   console.log("  freeze list [profile]");
   console.log("  freeze load <snapshot> [profile]");
   console.log("  freeze create <snapshot> [profile]");
+  console.log("  search <query text>              # find nodes by content");
+  console.log("  delete <node-id> [node-id ...]   # delete nodes by ID");
   console.log("  (legacy aliases still supported: current, snapshots, restore)");
   console.log("  init-profiles            # copy active small DB into profile storage");
   console.log("  build-noisy-large        # generate a large noisy graph DB and register profile");
   console.log("  bootstrap                # init-profiles + build-noisy-large");
   console.log("");
   console.log("Profile storage:");
-  console.log(`  ${PROFILE_DIR}`);
+  console.log(`  ${PROFILES_DIR}`);
   console.log("");
   console.log("Snapshot storage:");
-  console.log(`  ${SNAPSHOT_DIR}`);
+  console.log(`  ${SNAPSHOTS_DIR}`);
 }
 
 function main() {
@@ -455,6 +517,12 @@ function main() {
         break;
       case "unload":
         cmdUnload();
+        break;
+      case "search":
+        cmdSearch(args.slice(1));
+        break;
+      case "delete":
+        cmdDelete(args.slice(1));
         break;
       case "freeze":
         cmdFreezeRouting(args.slice(1));

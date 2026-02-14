@@ -11,6 +11,8 @@ export interface TokenUsage {
   l2_output: number;
   curate_input: number;
   curate_output: number;
+  reconcile_input: number;
+  reconcile_output: number;
   embedding_tokens: number;
 }
 
@@ -18,16 +20,20 @@ let usage: TokenUsage = {
   l1_input: 0, l1_output: 0,
   l2_input: 0, l2_output: 0,
   curate_input: 0, curate_output: 0,
+  reconcile_input: 0, reconcile_output: 0,
   embedding_tokens: 0,
 };
 
-export function trackTokens(layer: "l1" | "l2" | "curate", input: number, output: number) {
+export function trackTokens(layer: "l1" | "l2" | "curate" | "reconcile", input: number, output: number) {
   if (layer === "l1") {
     usage.l1_input += input;
     usage.l1_output += output;
   } else if (layer === "curate") {
     usage.curate_input += input;
     usage.curate_output += output;
+  } else if (layer === "reconcile") {
+    usage.reconcile_input += input;
+    usage.reconcile_output += output;
   } else {
     usage.l2_input += input;
     usage.l2_output += output;
@@ -47,6 +53,7 @@ export function resetUsage() {
     l1_input: 0, l1_output: 0,
     l2_input: 0, l2_output: 0,
     curate_input: 0, curate_output: 0,
+    reconcile_input: 0, reconcile_output: 0,
     embedding_tokens: 0,
   };
 }
@@ -79,7 +86,8 @@ export function calculateCosts(
   const l1Cost = (usage.l1_input * l1Price.input + usage.l1_output * l1Price.output) / 1_000_000;
   const l2Cost = (usage.l2_input * l2Price.input + usage.l2_output * l2Price.output) / 1_000_000;
   const curateCost = (usage.curate_input * l2Price.input + usage.curate_output * l2Price.output) / 1_000_000;
+  const reconcileCost = (usage.reconcile_input * l2Price.input + usage.reconcile_output * l2Price.output) / 1_000_000;
   const embCost = (usage.embedding_tokens * embPrice) / 1_000_000;
 
-  return { l1_cost: l1Cost, l2_cost: l2Cost, curate_cost: curateCost, embedding_cost: embCost, total_cost: l1Cost + l2Cost + curateCost + embCost };
+  return { l1_cost: l1Cost, l2_cost: l2Cost, curate_cost: curateCost, reconcile_cost: reconcileCost, embedding_cost: embCost, total_cost: l1Cost + l2Cost + curateCost + reconcileCost + embCost };
 }

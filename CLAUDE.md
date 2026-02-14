@@ -1,12 +1,10 @@
 This is a test environment for the Octybot memory system.
-Memory hooks are active — context from past conversations is injected automatically.
 
-Use DB profile manager for switching datasets and demo restore points:
-- Slash command plugin: `/octybot help`, `/octybot memory ...`
-- `bun pa-test-1/memory/db-manager.ts list`
-- `bun pa-test-1/memory/db-manager.ts active`
-- `bun pa-test-1/memory/db-manager.ts load small-baseline`
-- `bun pa-test-1/memory/db-manager.ts load noisy-large`
-- `bun pa-test-1/memory/db-manager.ts freeze list`
-- `bun pa-test-1/memory/db-manager.ts freeze create <snapshot-name>`
-- `bun pa-test-1/memory/db-manager.ts freeze load <snapshot-name>`
+## How memory works
+- Memory retrieval and storage happen AUTOMATICALLY via hooks (UserPromptSubmit / Stop).
+- You do NOT need to run any commands to store or retrieve memories. The hooks handle it.
+- Context from past conversations is injected into your system prompt automatically.
+- Do NOT attempt to store memories manually via bash commands — there is no CLI for that.
+
+## DB profile manager
+Use `/octybot-memory` for switching datasets, debug modes, and demo restore points. See `/octybot-memory help` for all commands.

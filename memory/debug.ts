@@ -16,6 +16,7 @@ export class Trace {
         entities: [],
         implied_facts: [],
         events: [],
+        plans: [],
         opinions: [],
         concepts: [],
         implied_processes: [],
@@ -100,6 +101,7 @@ export class Trace {
     lines.push(`Entities: ${this.data.layer1.entities.map(e => `${e.name} (${e.type}${e.ambiguous ? ", ambiguous" : ""})`).join(", ") || "(none)"}`);
     lines.push(`Implied facts: ${this.data.layer1.implied_facts.join("; ") || "(none)"}`);
     lines.push(`Events: ${this.data.layer1.events.join("; ") || "(none)"}`);
+    lines.push(`Plans: ${this.data.layer1.plans.join("; ") || "(none)"}`);
     lines.push(`Opinions: ${this.data.layer1.opinions.join("; ") || "(none)"}`);
     lines.push(`Concepts: ${this.data.layer1.concepts.join(", ") || "(none)"}`);
     lines.push(`Implied processes: ${this.data.layer1.implied_processes.join("; ") || "(none)"}`);

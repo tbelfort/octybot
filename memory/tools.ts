@@ -4,6 +4,7 @@ import {
   getEventsByEntity,
   getInstructions,
   getInstructionsByEntity,
+  getPlansByEntity,
   createNode,
   createEdge,
   supersedeNode,
@@ -124,6 +125,25 @@ export const RETRIEVE_TOOLS: ToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "search_plans",
+      description:
+        "Semantic search for upcoming plans and scheduled items. Optionally scoped to a specific entity.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query" },
+          entity_id: {
+            type: "string",
+            description: "Optional entity ID to scope results",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "get_instructions",
       description:
         "Find behavioral rules and instructions, optionally filtered by topic or scoped to a specific entity.",
@@ -203,13 +223,17 @@ export const STORE_TOOLS: ToolDefinition[] = [
         properties: {
           type: {
             type: "string",
-            enum: ["entity", "fact", "event", "opinion", "instruction"],
-            description: "Node type. Use 'instruction' for rules, procedures, tool usage guides, and behavioral instructions.",
+            enum: ["entity", "fact", "event", "opinion", "instruction", "plan"],
+            description: "Node type. Use 'instruction' for rules, procedures, tool usage guides. Use 'plan' for future scheduled things with dates.",
           },
           subtype: {
             type: "string",
             description:
-              'Optional classifier within the type. For entities: "person", "org", "tool". For instructions: "rule", "tool_usage", "process". For events: "action".',
+              'Optional classifier within the type. For entities: "person", "org", "tool". For instructions: "rule", "tool_usage", "process". For events: "action". For plans: "scheduled", "intended", "requested".',
+          },
+          valid_from: {
+            type: "string",
+            description: "ISO date string (YYYY-MM-DD). Required for plans — the scheduled date. Optional for events.",
           },
           content: { type: "string", description: "Memory content" },
           entity_ids: {
@@ -224,7 +248,7 @@ export const STORE_TOOLS: ToolDefinition[] = [
           salience: {
             type: "number",
             description:
-              "Importance multiplier. Base: 1.0. Set HIGHER (1.5-3.0) for critical rules, warnings, or information that would be damaging if not surfaced. Set LOWER (0.3-0.7) for routine observations. Default: 1.0.",
+              "Importance multiplier. Base: 1.0. For facts/events: set 1.5-2.0 for critical info (lost clients, deadlines), 0.5-0.8 for routine. For instructions: do NOT set — they surface by relevance + scope. Default: 1.0.",
           },
           source: {
             type: "string",
@@ -234,7 +258,7 @@ export const STORE_TOOLS: ToolDefinition[] = [
           scope: {
             type: "number",
             description:
-              "For instructions: how broadly this applies. 1.0 = universal rule (e.g. 'Always check Originality.ai'). 0.5 = tool/team-wide (e.g. 'Airtable lookup process'). 0.2 = entity-specific (e.g. 'Brightwell needs ContentShake'). Default: 0.5.",
+              "How broadly this applies. 1.0 = universal/org-wide. 0.5 = tool/team-wide. 0.2 = entity-specific. Default: 0.5 for instructions, 0.3 for plans, null for others.",
           },
           related_ids: {
             type: "array",
@@ -385,7 +409,7 @@ export async function handleToolCall(
         entityEvents = getRecentEventIds(args.days as number);
       }
       const results = searchSimilar(queryVec, 20, {
-        nodeType: "event",
+        nodeTypes: ["event", "plan"],
         nodeIds: entityEvents,
       });
       if (results.length === 0) return "No matching events found.";
@@ -402,6 +426,35 @@ export async function handleToolCall(
         eventsOutput += "\nTip: These are broad results. Use entity_id to scope for more precise matches.";
       }
       return eventsOutput;
+    }
+
+    case "search_plans": {
+      const query = (args.query as string || "").trim();
+      if (!query) return "No matching plans found. Provide a non-empty query.";
+      const queryVec = (await embed([query], "query"))[0];
+      let entityPlanIds: string[] | undefined;
+      if (args.entity_id) {
+        const plans = getPlansByEntity(args.entity_id as string);
+        entityPlanIds = plans.map((p) => p.id);
+      }
+      const results = searchSimilar(queryVec, 20, {
+        nodeType: "plan",
+        nodeIds: entityPlanIds,
+      });
+      if (results.length === 0) return "No matching plans found.";
+
+      let plansOutput = results
+        .map((r) => {
+          const node = getNode(r.nodeId);
+          if (!node) return `(node ${r.nodeId} not found)`;
+          const dateTag = node.valid_from ? ` [scheduled: ${node.valid_from}]` : "";
+          return `${formatNode(node)}${dateTag} [score: ${r.score.toFixed(3)}]`;
+        })
+        .join("\n");
+      if (!args.entity_id && results.length >= 5) {
+        plansOutput += "\nTip: These are broad results. Use entity_id to scope for more precise matches.";
+      }
+      return plansOutput;
     }
 
     case "search_processes": {
@@ -453,16 +506,48 @@ export async function handleToolCall(
       const subtypeToType: Record<string, string> = {
         tool_usage: "instruction", process: "instruction",
         preference: "opinion", rule: "instruction",
+        scheduled: "plan", intended: "plan", requested: "plan",
       };
       if (nodeType && subtypeToType[nodeType]) {
         args.subtype = args.subtype || nodeType;
         nodeType = subtypeToType[nodeType];
       }
-      const validTypes = ["entity", "fact", "event", "opinion", "instruction"];
+      const validTypes = ["entity", "fact", "event", "opinion", "instruction", "plan"];
       if (!nodeType || !validTypes.includes(nodeType))
         return `Error: type must be one of: ${validTypes.join(", ")}. Got: ${JSON.stringify(nodeType)}`;
       if (!content)
         return "Error: content is required and must be non-empty.";
+      // Reject garbled LLM output
+      const stripped = content.replace(/[.\s]/g, "");
+      if (stripped.length < content.length * 0.3)
+        return `Error: content looks garbled (too much padding/ellipsis). Got: "${content.slice(0, 80)}"`;
+      // Reject repeated word patterns (e.g. "the the the the")
+      const words = content.split(/\s+/);
+      if (words.length >= 4) {
+        const wordCounts = new Map<string, number>();
+        for (const w of words) wordCounts.set(w.toLowerCase(), (wordCounts.get(w.toLowerCase()) ?? 0) + 1);
+        const maxRepeat = Math.max(...wordCounts.values());
+        if (maxRepeat > words.length * 0.5)
+          return `Error: content has excessive word repetition. Got: "${content.slice(0, 80)}"`;
+      }
+      // Reject content that's too short to be meaningful (entities/opinions exempt)
+      if (content.length < 10 && !["entity"].includes(nodeType))
+        return `Error: content too short to be meaningful (${content.length} chars). Got: "${content}"`;
+      // Validate scope is 0-1 for instructions/plans
+      if (args.scope != null) {
+        const scope = args.scope as number;
+        if (typeof scope !== "number" || scope < 0 || scope > 1)
+          return `Error: scope must be between 0 and 1. Got: ${scope}`;
+      }
+      // Validate valid_from is a valid ISO date for plans
+      if (nodeType === "plan" && args.valid_from) {
+        const vf = args.valid_from as string;
+        if (!/^\d{4}-\d{2}-\d{2}/.test(vf) || isNaN(new Date(vf).getTime()))
+          return `Error: valid_from must be a valid ISO date (YYYY-MM-DD). Got: "${vf}"`;
+      }
+      // Dedup entity_ids
+      const rawEntityIds = (args.entity_ids as string[]) ?? [];
+      const dedupedEntityIds = [...new Set(rawEntityIds)];
       const nodeId = createNode({
         node_type: nodeType as MemoryNode["node_type"],
         subtype: args.subtype as string | undefined,
@@ -472,11 +557,11 @@ export async function handleToolCall(
         source: (args.source as "user" | "claude") ?? "user",
         attributes: {},
         scope: args.scope as number | undefined,
+        valid_from: args.valid_from as string | undefined,
       });
-      // Create edges to entities
-      const entityIds = (args.entity_ids as string[]) ?? [];
+      // Create edges to entities (using deduped IDs)
       const edgeType = (args.edge_type as string) ?? "about";
-      for (const eid of entityIds) {
+      for (const eid of dedupedEntityIds) {
         createEdge({
           source_id: nodeId,
           target_id: eid,

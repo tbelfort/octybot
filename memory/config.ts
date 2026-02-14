@@ -1,5 +1,16 @@
 import { readFileSync } from "fs";
-import { join } from "path";
+import { basename, join } from "path";
+
+// Project-aware data paths
+const HOME = process.env.HOME || "~";
+const PROJECT_ID = process.env.OCTYBOT_PROJECT || basename(process.cwd());
+const PROJECT_DATA = join(HOME, ".octybot", "projects", PROJECT_ID, "memory");
+
+export const DB_PATH = process.env.DB_PATH || join(PROJECT_DATA, "memory.db");
+export const DEBUG_DIR = join(PROJECT_DATA, "debug");
+export const PROFILES_DIR = join(PROJECT_DATA, "profiles");
+export const SNAPSHOTS_DIR = join(PROJECT_DATA, "snapshots");
+export const CONVERSATION_STATE_PATH = join(PROJECT_DATA, ".conversation-state.json");
 
 // CF Workers AI (lazy — only throws when actually needed)
 let _cfAccountId: string | null = null;
@@ -57,13 +68,8 @@ export function getWranglerToken(): string {
   return match[1];
 }
 
-// Local DB
-const HOME = process.env.HOME || "~";
-export const DB_PATH = process.env.DB_PATH || join(HOME, ".octybot", "test", "memory.db");
-
 // Debug
 export const DEBUG = process.env.OCTY_DEBUG === "1";
-export const DEBUG_DIR = join(HOME, ".octybot", "test", "debug");
 
 // Limits
 export const MAX_LAYER2_TURNS = 8;

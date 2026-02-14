@@ -132,13 +132,15 @@ export function createNode(
 ): string {
   const db = getDb();
   const id = uuid();
-  // Hardcoded override: instructions are never summarizable
-  const canSummarize = node.node_type === "instruction"
+  // Hardcoded override: instructions and plans are never summarizable (need exact dates/wording)
+  const canSummarize = (node.node_type === "instruction" || node.node_type === "plan")
     ? 0
     : (node.can_summarize ?? 1);
-  // For instructions: default scope to 0.5 if not provided. Other types: null.
+  // Scope defaults: instructions 0.5, plans 0.3, others null unless set
   const scope = node.node_type === "instruction"
     ? (node.scope ?? 0.5)
+    : node.node_type === "plan"
+    ? (node.scope ?? 0.3)
     : (node.scope ?? null);
   db.prepare(
     `INSERT INTO nodes (id, node_type, subtype, content, salience, confidence, source, valid_from, valid_until, superseded_by, attributes, can_summarize, scope)
@@ -165,6 +167,14 @@ export function createEdge(
   edge: Omit<Edge, "id" | "created_at">
 ): string {
   const db = getDb();
+  // Verify both nodes exist before creating edge
+  const sourceExists = db.prepare("SELECT 1 FROM nodes WHERE id = ?").get(edge.source_id);
+  const targetExists = db.prepare("SELECT 1 FROM nodes WHERE id = ?").get(edge.target_id);
+  if (!sourceExists || !targetExists) {
+    const missing = !sourceExists ? edge.source_id : edge.target_id;
+    console.error(`[db] Skipping edge creation: node ${missing} not found`);
+    return "";
+  }
   const id = uuid();
   db.prepare(
     `INSERT INTO edges (id, source_id, target_id, edge_type, attributes)
@@ -277,7 +287,7 @@ export function getRecentEventIds(days: number): string[] {
   const db = getDb();
   const rows = db.prepare(
     `SELECT id FROM nodes
-     WHERE node_type = 'event' AND superseded_by IS NULL
+     WHERE node_type IN ('event', 'plan') AND superseded_by IS NULL
        AND created_at >= datetime('now', ?)
      ORDER BY created_at DESC`
   ).all(`-${days} days`) as { id: string }[];
@@ -291,7 +301,7 @@ export function getEventsByEntity(
   const db = getDb();
   let query = `SELECT DISTINCT n.* FROM nodes n
        JOIN edges e ON (e.target_id = n.id OR e.source_id = n.id)
-       WHERE n.node_type = 'event'
+       WHERE n.node_type IN ('event', 'plan')
          AND n.superseded_by IS NULL
          AND (e.source_id = ? OR e.target_id = ?)`;
 
@@ -354,16 +364,18 @@ export function getInstructions(topic?: string): MemoryNode[] {
   return rows.map(parseNode);
 }
 
-export function getGlobalInstructions(): MemoryNode[] {
+export function getGlobalInstructions(limit: number = 20): MemoryNode[] {
   const db = getDb();
   const rows = db
     .prepare(
       `SELECT * FROM nodes
        WHERE node_type = 'instruction'
          AND scope >= 0.8
-         AND superseded_by IS NULL`
+         AND superseded_by IS NULL
+       ORDER BY scope DESC, salience DESC
+       LIMIT ?`
     )
-    .all() as Record<string, unknown>[];
+    .all(limit) as Record<string, unknown>[];
   return rows.map(parseNode);
 }
 
@@ -401,6 +413,15 @@ export function supersedeNode(oldId: string, newContent: string): string {
   const oldNode = getNode(oldId);
   if (!oldNode) throw new Error(`Node ${oldId} not found`);
 
+  // Validate replacement content isn't garbled
+  const stripped = newContent.replace(/[.\s]/g, "");
+  if (stripped.length < newContent.length * 0.3) {
+    throw new Error(`Replacement content looks garbled: "${newContent.slice(0, 80)}"`);
+  }
+  if (newContent.trim().length < 10 && oldNode.node_type !== "entity") {
+    throw new Error(`Replacement content too short: "${newContent}"`);
+  }
+
   // Create replacement node
   const newId = createNode({
     node_type: oldNode.node_type,
@@ -419,7 +440,8 @@ export function supersedeNode(oldId: string, newContent: string): string {
     oldId
   );
 
-  // Copy edges to new node (deduplicate self-referential edges)
+  // Copy edges to new node — deduplicate by (target, edge_type) pair to prevent
+  // duplicate edges when old node had both in/out edges to the same target
   const outEdges = db
     .prepare("SELECT * FROM edges WHERE source_id = ?")
     .all(oldId) as Record<string, unknown>[];
@@ -428,15 +450,21 @@ export function supersedeNode(oldId: string, newContent: string): string {
     .all(oldId) as Record<string, unknown>[];
 
   const seenEdgeIds = new Set<string>();
+  const seenTargets = new Set<string>(); // "targetId:edgeType" dedup key
 
   for (const edge of outEdges) {
     const eid = edge.id as string;
     if (seenEdgeIds.has(eid)) continue;
     seenEdgeIds.add(eid);
+    const targetId = edge.target_id as string;
+    const edgeType = edge.edge_type as string;
+    const dedupKey = `${targetId}:${edgeType}`;
+    if (seenTargets.has(dedupKey)) continue;
+    seenTargets.add(dedupKey);
     createEdge({
       source_id: newId,
-      target_id: edge.target_id as string,
-      edge_type: edge.edge_type as string,
+      target_id: targetId,
+      edge_type: edgeType,
       attributes: JSON.parse((edge.attributes as string) || "{}"),
     });
   }
@@ -445,13 +473,60 @@ export function supersedeNode(oldId: string, newContent: string): string {
     const eid = edge.id as string;
     if (seenEdgeIds.has(eid)) continue;
     seenEdgeIds.add(eid);
+    const sourceId = edge.source_id as string;
+    const edgeType = edge.edge_type as string;
+    const dedupKey = `${sourceId}:${edgeType}`;
+    if (seenTargets.has(dedupKey)) continue;
+    seenTargets.add(dedupKey);
     createEdge({
-      source_id: edge.source_id as string,
+      source_id: sourceId,
       target_id: newId,
-      edge_type: edge.edge_type as string,
+      edge_type: edgeType,
       attributes: JSON.parse((edge.attributes as string) || "{}"),
     });
   }
 
   return newId;
+}
+
+/**
+ * Promote a plan node to an event if its valid_from date has passed.
+ * Updates both the nodes and embeddings tables.
+ * Returns the updated node, or null if not eligible for promotion.
+ */
+export function promotePlanToEvent(nodeId: string): MemoryNode | null {
+  const db = getDb();
+  const node = getNode(nodeId);
+  if (!node || node.node_type !== "plan" || !node.valid_from) return null;
+
+  const now = new Date();
+  const validFrom = new Date(node.valid_from);
+  if (validFrom > now) return null; // not yet past
+
+  db.prepare(
+    `UPDATE nodes SET node_type = 'event', subtype = 'completed_plan' WHERE id = ?`
+  ).run(nodeId);
+  db.prepare(
+    `UPDATE embeddings SET node_type = 'event' WHERE node_id = ?`
+  ).run(nodeId);
+
+  return getNode(nodeId);
+}
+
+/**
+ * Get plan nodes connected to a specific entity via edges, sorted by valid_from ascending.
+ */
+export function getPlansByEntity(entityId: string): MemoryNode[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT n.* FROM nodes n
+       JOIN edges e ON (e.target_id = n.id OR e.source_id = n.id)
+       WHERE n.node_type = 'plan'
+         AND n.superseded_by IS NULL
+         AND (e.source_id = ? OR e.target_id = ?)
+       ORDER BY n.valid_from ASC`
+    )
+    .all(entityId, entityId) as Record<string, unknown>[];
+  return rows.map(parseNode);
 }
