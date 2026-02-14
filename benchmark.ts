@@ -423,6 +423,7 @@ async function runQuery(
     l1.entities.length > 0 ||
     l1.implied_facts.length > 0 ||
     l1.events.length > 0 ||
+    l1.plans.length > 0 ||
     l1.opinions.length > 0 ||
     l1.concepts.length > 0 ||
     l1.implied_processes.length > 0;

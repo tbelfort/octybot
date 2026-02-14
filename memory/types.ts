@@ -1,5 +1,5 @@
 // Node types
-export type NodeType = "entity" | "fact" | "event" | "opinion" | "instruction";
+export type NodeType = "entity" | "fact" | "event" | "opinion" | "instruction" | "plan";
 export type EntityType =
   | "person"
   | "org"
@@ -22,7 +22,9 @@ export type EventSubtype =
   | "decision"
   | "conversation"
   | "incident"
-  | "outcome";
+  | "outcome"
+  | "completed_plan";
+export type PlanSubtype = "scheduled" | "intended" | "requested";
 
 export interface MemoryNode {
   id: string;
@@ -38,7 +40,7 @@ export interface MemoryNode {
   superseded_by?: string;
   attributes: Record<string, unknown>;
   can_summarize?: number;
-  scope?: number; // 0–1 float: how broadly this memory applies. 1.0 = universal, 0.5 = tool/team, 0.2 = entity-specific. Instructions only.
+  scope?: number; // 0–1 float: how broadly this memory applies. 1.0 = universal, 0.5 = tool/team, 0.2 = entity-specific. Used by instructions, plans, and optionally facts/events.
 }
 
 export interface Edge {
@@ -69,6 +71,7 @@ export interface Layer1Result {
   entities: { name: string; type: EntityType; ambiguous: boolean }[];
   implied_facts: string[];
   events: string[];
+  plans: string[];
   opinions: string[];
   concepts: string[];
   implied_processes: string[];
@@ -90,15 +93,37 @@ export interface ToolTurn {
   tool_call: ToolCall;
   result: ToolResult;
   reasoning?: string;           // L2's response.content before this tool call
-  _pipeline?: "retrieve" | "store";
+  _pipeline?: "retrieve" | "store" | "reconcile";
 }
 
 // Storage filter output
 export interface StoreItem {
   content: string;
-  type: string;        // fact, event, opinion
-  subtype?: string;    // instruction, tool_usage, definitional, action, etc.
+  type: string;        // fact, event, opinion, plan, instruction
+  subtype?: string;    // instruction, tool_usage, definitional, action, scheduled, etc.
   reason?: string;     // why it's worth storing
+  valid_from?: string; // ISO date — required for plans
+  scope?: number;      // 0–1 breadth (optional for all types)
+  salience?: number;   // importance multiplier (optional, LLM-set)
+}
+
+// Conversation state (follow-up pipeline)
+export interface ConversationTurn {
+  prompt: string;
+  entities: string[];  // entity names from this turn
+  timestamp: number;
+}
+
+export interface ConversationState {
+  turns: ConversationTurn[];
+}
+
+export interface FollowUpResult {
+  context: string;
+  turns: ToolTurn[];
+  storeItems: StoreItem[];
+  reasoning: string;
+  timing: { analysis_ms: number; search_ms: number; store_ms?: number };
 }
 
 // Debug trace

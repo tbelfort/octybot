@@ -132,13 +132,15 @@ export function createNode(
 ): string {
   const db = getDb();
   const id = uuid();
-  // Hardcoded override: instructions are never summarizable
-  const canSummarize = node.node_type === "instruction"
+  // Hardcoded override: instructions and plans are never summarizable (need exact dates/wording)
+  const canSummarize = (node.node_type === "instruction" || node.node_type === "plan")
     ? 0
     : (node.can_summarize ?? 1);
-  // For instructions: default scope to 0.5 if not provided. Other types: null.
+  // Scope defaults: instructions 0.5, plans 0.3, others null unless set
   const scope = node.node_type === "instruction"
     ? (node.scope ?? 0.5)
+    : node.node_type === "plan"
+    ? (node.scope ?? 0.3)
     : (node.scope ?? null);
   db.prepare(
     `INSERT INTO nodes (id, node_type, subtype, content, salience, confidence, source, valid_from, valid_until, superseded_by, attributes, can_summarize, scope)
@@ -273,11 +275,27 @@ export function getFactsByEntity(entityId: string): MemoryNode[] {
   return rows.map(parseNode);
 }
 
+/** Get all non-entity nodes connected to an entity (facts, opinions, instructions, events) */
+export function getNodesByEntity(entityId: string): MemoryNode[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT n.* FROM nodes n
+       JOIN edges e ON (e.target_id = n.id OR e.source_id = n.id)
+       WHERE n.node_type != 'entity'
+         AND n.superseded_by IS NULL
+         AND (e.source_id = ? OR e.target_id = ?)
+       ORDER BY n.salience DESC`
+    )
+    .all(entityId, entityId) as Record<string, unknown>[];
+  return rows.map(parseNode);
+}
+
 export function getRecentEventIds(days: number): string[] {
   const db = getDb();
   const rows = db.prepare(
     `SELECT id FROM nodes
-     WHERE node_type = 'event' AND superseded_by IS NULL
+     WHERE node_type IN ('event', 'plan') AND superseded_by IS NULL
        AND created_at >= datetime('now', ?)
      ORDER BY created_at DESC`
   ).all(`-${days} days`) as { id: string }[];
@@ -291,7 +309,7 @@ export function getEventsByEntity(
   const db = getDb();
   let query = `SELECT DISTINCT n.* FROM nodes n
        JOIN edges e ON (e.target_id = n.id OR e.source_id = n.id)
-       WHERE n.node_type = 'event'
+       WHERE n.node_type IN ('event', 'plan')
          AND n.superseded_by IS NULL
          AND (e.source_id = ? OR e.target_id = ?)`;
 
@@ -454,4 +472,46 @@ export function supersedeNode(oldId: string, newContent: string): string {
   }
 
   return newId;
+}
+
+/**
+ * Promote a plan node to an event if its valid_from date has passed.
+ * Updates both the nodes and embeddings tables.
+ * Returns the updated node, or null if not eligible for promotion.
+ */
+export function promotePlanToEvent(nodeId: string): MemoryNode | null {
+  const db = getDb();
+  const node = getNode(nodeId);
+  if (!node || node.node_type !== "plan" || !node.valid_from) return null;
+
+  const now = new Date();
+  const validFrom = new Date(node.valid_from);
+  if (validFrom > now) return null; // not yet past
+
+  db.prepare(
+    `UPDATE nodes SET node_type = 'event', subtype = 'completed_plan' WHERE id = ?`
+  ).run(nodeId);
+  db.prepare(
+    `UPDATE embeddings SET node_type = 'event' WHERE node_id = ?`
+  ).run(nodeId);
+
+  return getNode(nodeId);
+}
+
+/**
+ * Get plan nodes connected to a specific entity via edges, sorted by valid_from ascending.
+ */
+export function getPlansByEntity(entityId: string): MemoryNode[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT n.* FROM nodes n
+       JOIN edges e ON (e.target_id = n.id OR e.source_id = n.id)
+       WHERE n.node_type = 'plan'
+         AND n.superseded_by IS NULL
+         AND (e.source_id = ? OR e.target_id = ?)
+       ORDER BY n.valid_from ASC`
+    )
+    .all(entityId, entityId) as Record<string, unknown>[];
+  return rows.map(parseNode);
 }

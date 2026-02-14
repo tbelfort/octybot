@@ -5,12 +5,13 @@ import {
 } from "./config";
 import type { ChatMessage, ToolDefinition, WorkersAIToolCall } from "./types";
 import { trackTokens } from "./usage-tracker";
+import { callClaude } from "./claude-agent";
 
 interface WorkersAIOptions {
   tools?: ToolDefinition[];
   max_tokens?: number;
   temperature?: number;
-  tag?: "l1" | "l2" | "curate";
+  tag?: "l1" | "l2" | "curate" | "reconcile";
 }
 
 interface WorkersAIResponse {
@@ -28,10 +29,38 @@ export async function callWorkersAI(
   options: WorkersAIOptions = {}
 ): Promise<WorkersAIResponse> {
   // Route: @cf/ models go to CF Workers AI, everything else to OpenRouter
-  if (model.startsWith("@cf/")) {
-    return callCF(model, messages, options);
+  const callPrimary = model.startsWith("@cf/")
+    ? () => callCF(model, messages, options)
+    : () => callOpenRouter(model, messages, options);
+
+  const result = await callPrimary();
+
+  // If content is empty and no tool calls, retry once then fall back to Sonnet
+  if (!result.content && !result.tool_calls?.length) {
+    console.error(`[workers-ai] Empty response from ${model}, retrying once...`);
+    const retry = await callPrimary();
+    if (retry.content || retry.tool_calls?.length) return retry;
+
+    // Sonnet fallback — extract system/user from messages
+    console.error(`[workers-ai] Retry also empty, falling back to Sonnet agent`);
+    try {
+      const systemMsg = messages.find(m => m.role === "system");
+      const userMsgs = messages.filter(m => m.role === "user");
+      const sonnetResult = await callClaude({
+        model: "sonnet",
+        systemPrompt: systemMsg?.content || "You are a helpful assistant.",
+        userMessage: userMsgs.map(m => m.content).join("\n\n"),
+        effort: "low",
+        timeout: 30_000,
+      });
+      return { content: sonnetResult.content, usage: { prompt_tokens: sonnetResult.input_tokens, completion_tokens: sonnetResult.output_tokens } };
+    } catch (err) {
+      console.error(`[workers-ai] Sonnet fallback failed: ${(err as Error).message.slice(0, 100)}`);
+      return result; // Return original empty result
+    }
   }
-  return callOpenRouter(model, messages, options);
+
+  return result;
 }
 
 // ── Cloudflare Workers AI ────────────────────────────────────────────
