@@ -261,14 +261,19 @@ The runtime agent (`src/agent/`) has a separate, simpler JSON-based memory plugi
 /octybot memory status          # show memory state
 /octybot memory on|off          # toggle memory
 /octybot memory dev on|off      # toggle trace logging
-/octybot memory forget <query>  # remove matching memories
-/octybot memory freeze <name>   # save snapshot
+/octybot memory forget <query>  # soft-forget matching memories (decay salience)
+/octybot memory backup          # create a timestamped backup snapshot
+/octybot memory freeze <name>   # save named snapshot
 /octybot memory restore <name>  # restore snapshot
 /octybot memory list            # list snapshots
-/octybot memory clear           # wipe all memory
+/octybot memory clear --confirm # wipe all memory (requires --confirm flag)
 ```
 
-Storage: `~/.octybot/memory-plugin.json`
+`clear` requires the `--confirm` flag — without it, you get a warning showing how many entries will be deleted. An automatic backup snapshot is created before clearing, so you can always restore with `/octybot memory restore pre-clear-<timestamp>`.
+
+`backup` creates a timestamped snapshot (`backup-2026-02-15T14-30-00`) without needing to choose a name.
+
+Storage: `~/.octybot/memory-plugin.json`, snapshots in `~/.octybot/memory-plugin-snapshots/`
 
 This is independent of the SQL graph memory system — it runs in the agent process and stores memories as JSON.
 
