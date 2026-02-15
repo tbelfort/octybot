@@ -1,367 +1,314 @@
 # Octybot
 
-Use Claude Code from your iPhone. Octybot bridges your phone with a home Mac running the Claude CLI through a secure, real-time chat interface.
+Use Claude from your iPhone. Octybot connects your phone to a Mac at home running Claude Code, giving you a real-time chat interface anywhere you go.
 
 ```
-iPhone PWA <-> Cloudflare Worker <-> Home Agent <-> Claude CLI
+iPhone (PWA) <---> Cloudflare Worker <---> Your Mac (Agent) <---> Claude CLI
 ```
 
-The project also includes a graph-based long-term memory system that gives Claude persistent memory across conversations via hooks.
+It also includes a long-term memory system that lets Claude remember things across conversations.
 
-## Components
+## What You Need
 
-| Directory | What | Runtime |
-|---|---|---|
-| `src/agent/` | Polls for messages, spawns `claude`, streams responses back | Bun (local Mac) |
-| `src/worker/` | API server — device registration, message queue, SSE streaming | Cloudflare Workers + D1 |
-| `src/pwa/` | Chat UI — vanilla JS progressive web app | Cloudflare Pages |
-| `memory/` | Graph-based long-term memory system | Bun + SQLite |
+- A Mac (the computer that runs Claude for you)
+- An iPhone (or any phone with a browser)
+- A [Cloudflare](https://cloudflare.com) account (free tier works)
+- An [Anthropic](https://console.anthropic.com) API key (for Claude)
 
-## Quick Start
+## Setup Guide
 
-### Prerequisites
+This guide walks you through setting up Octybot from scratch. It takes about 15 minutes.
 
-- [Bun](https://bun.sh) — `curl -fsSL https://bun.sh/install | bash`
-- [Claude CLI](https://docs.anthropic.com/en/docs/claude-code/overview) — `npm install -g @anthropic-ai/claude-code`
+### Step 1: Install the tools on your Mac
 
-### Install the Agent as a Service
+Open Terminal (search for "Terminal" in Spotlight) and run these commands one at a time:
+
+```bash
+# Install Bun (a JavaScript runtime)
+curl -fsSL https://bun.sh/install | bash
+
+# Install the Claude CLI
+npm install -g @anthropic-ai/claude-code
+
+# Clone this project
+git clone https://github.com/tbelfort/octybot.git
+cd octybot
+```
+
+If you don't have `npm`, install [Node.js](https://nodejs.org) first (download the LTS version).
+
+After installing Claude CLI, run `claude` once in your terminal and follow the prompts to sign in with your Anthropic account.
+
+### Step 2: Set up the Cloudflare Worker
+
+The worker is a small server that runs on Cloudflare's network. It relays messages between your phone and your Mac.
+
+#### 2a. Install Wrangler (Cloudflare's CLI tool)
+
+```bash
+npm install -g wrangler
+```
+
+Then log in to your Cloudflare account:
+
+```bash
+npx wrangler login
+```
+
+This opens a browser window. Click "Allow" to authorize.
+
+#### 2b. Create the database
+
+The worker stores conversations in a Cloudflare D1 database:
+
+```bash
+npx wrangler d1 create octybot-db
+```
+
+This prints something like:
+
+```
+Created D1 database 'octybot-db'
+database_id = "abc12345-6789-..."
+```
+
+**Copy that `database_id` value.** Open `src/worker/wrangler.toml` and replace the existing `database_id` line with yours:
+
+```toml
+[[d1_databases]]
+binding = "DB"
+database_name = "octybot-db"
+database_id = "paste-your-database-id-here"
+```
+
+#### 2c. Set up the database tables
+
+```bash
+cd src/worker
+npx wrangler d1 migrations apply octybot-db --remote
+```
+
+This creates the tables the worker needs (conversations, messages, devices, etc).
+
+#### 2d. Set worker secrets
+
+The worker needs two secrets. Run each command and paste the value when prompted:
+
+```bash
+# A random string used to sign authentication tokens.
+# You can generate one with: openssl rand -hex 32
+npx wrangler secret put JWT_SECRET
+
+# Your Anthropic API key from https://console.anthropic.com
+npx wrangler secret put ANTHROPIC_API_KEY
+```
+
+#### 2e. Deploy the worker
+
+```bash
+npm install
+npx wrangler deploy
+```
+
+After deploying, Wrangler prints your worker's URL. It looks like:
+
+```
+Published octybot-worker (1.2s)
+  https://octybot-worker.YOUR-SUBDOMAIN.workers.dev
+```
+
+**Copy this URL.** You'll need it in the next steps.
+
+```bash
+cd ../..
+```
+
+### Step 3: Update the worker URL in the code
+
+Two files have the worker URL hardcoded. Update both with the URL from the previous step:
+
+**File 1:** `src/pwa/app.js` (line 2)
+```js
+const WORKER_URL = "https://octybot-worker.YOUR-SUBDOMAIN.workers.dev";
+```
+
+**File 2:** `src/agent/index.ts` (line 29)
+```ts
+const WORKER_URL = "https://octybot-worker.YOUR-SUBDOMAIN.workers.dev";
+```
+
+Replace `YOUR-SUBDOMAIN` with your actual Cloudflare subdomain in both files.
+
+### Step 4: Deploy the phone app (PWA)
+
+The phone app is a static website deployed to Cloudflare Pages.
+
+```bash
+npx wrangler pages project create octybot-pwa
+npx wrangler pages deploy src/pwa --project-name octybot-pwa
+```
+
+Wrangler prints the URL of your PWA:
+
+```
+Deployment complete!
+  https://octybot-pwa.pages.dev
+```
+
+**Open this URL on your iPhone** and add it to your home screen:
+1. Open the URL in Safari
+2. Tap the Share button (square with arrow)
+3. Tap "Add to Home Screen"
+4. Tap "Add"
+
+Now it works like a native app.
+
+### Step 5: Start the agent on your Mac
+
+The agent is the program on your Mac that talks to Claude. Install it as a background service:
 
 ```bash
 bun src/agent/service.ts install
 ```
 
-This will:
-1. Verify `bun` and `claude` are in PATH
-2. Install a launchd service that starts on login and restarts on crash
-3. Prevent idle sleep (via `caffeinate`)
-4. Display a pairing code to enter in the phone app
+This does three things:
+1. Verifies Bun and Claude CLI are installed
+2. Installs a macOS service that starts automatically on login
+3. Displays a **pairing code** (like `WOLF-3847`)
 
-The agent runs in the background — it survives terminal closes, sleep, and reboots.
+### Step 6: Pair your phone
 
-### Service Management
+1. Open the Octybot app on your iPhone (the PWA you added to your home screen)
+2. Enter the pairing code shown in your terminal
+3. Tap "Pair"
+
+That's it. You can now send messages to Claude from your phone. Your Mac does the actual processing, so it needs to be on and connected to the internet.
+
+## After Setup
+
+### Managing the agent
+
+The agent runs in the background. You can manage it with these commands:
 
 ```bash
-bun src/agent/service.ts status     # check if running (shows PID)
-bun src/agent/service.ts logs       # tail live logs
-bun src/agent/service.ts stop       # stop the agent
-bun src/agent/service.ts start      # start the agent
+bun src/agent/service.ts status     # check if running
+bun src/agent/service.ts logs       # see recent logs
+bun src/agent/service.ts stop       # pause the agent
+bun src/agent/service.ts start      # resume the agent
 bun src/agent/service.ts uninstall  # remove the service entirely
 ```
 
-`stop` halts the agent but keeps the service installed — `start` brings it back. The service auto-restarts on crash and on login, so `stop` is the way to intentionally pause it. Use `uninstall` to fully remove the launchd entry.
+`stop` pauses the agent but keeps the service installed. `start` brings it back. The service auto-restarts after crashes and reboots, so use `stop` when you intentionally want to pause it.
 
-### Run Manually (without service)
+### Running manually (without the service)
+
+If you prefer not to install a service:
 
 ```bash
 cd src/agent && bun run index.ts
 ```
 
-On first run, a pairing code is displayed. Enter it in the phone app to link the device. Credentials are saved to `~/.octybot/device.json`.
+The agent runs until you close the terminal.
 
-## Memory System
+### Logs
 
-The memory system gives Claude persistent context across conversations. It stores entities, facts, events, plans, instructions, and opinions in a SQLite graph database with vector embeddings, and automatically retrieves relevant memories before each response.
+Agent logs are at `~/.octybot/logs/agent.log`. They auto-rotate at 10 MB.
 
-### How It Works
+## Memory System (Optional)
 
-Memory operates through Claude Code hooks — no manual commands needed:
+The memory system gives Claude persistent context across conversations. It remembers people, facts, events, plans, and instructions using a graph database with vector search.
 
-1. **Before each prompt** (`UserPromptSubmit` hook): retrieves relevant context from the graph and injects it into the system prompt
-2. **After each response** (`Stop` hook): extracts new information from the conversation and stores it
+Memory works automatically through Claude Code hooks -- no manual commands needed. Before each of your prompts, it retrieves relevant context. After each response, it stores new information.
 
-```
-User prompt
-    |
-    v
-[L1: Classification] -----> entities, facts, events, plans, intents
-    |
-    v
-[L1.5: Strategy]     -----> search plan + storage filter + instruction extractor
-    |
-    v
-[L2: Agentic Loops]  -----> retrieve loop (search tools) | store loop (write tools)
-    |                                |                            |
-    |                        [Safety Nets]                  [Reconciliation]
-    |                           |                                 |
-    v                           v                                 v
-[Assembly]            [Curation (Method B)]              [Conflict detection]
-    |
-    v
-Context injected into Claude's system prompt
-```
+### Setting up memory
 
-### Architecture
+You need API keys from two services (both have free tiers):
 
-**Layer 1 — Classification** (`memory/layer1.ts`)
+1. **OpenRouter** -- Sign up at [openrouter.ai](https://openrouter.ai), go to Keys, and create an API key
+2. **Voyage AI** -- Sign up at [voyageai.com](https://voyageai.com), go to API Keys, and create one (200M tokens free)
 
-A single LLM call classifies the user's message:
-- Extracts entities, facts, events, plans, opinions, concepts, and processes
-- Determines intent (information, instruction, correction, etc.)
-- Decides whether to retrieve, store, or both
-- Multi-sentence messages are split and classified in parallel, then merged
-
-**Layer 1.5 — Reasoning** (`memory/layer2.ts`)
-
-Three specialized pre-processing steps run before the agentic loops:
-- **Search strategy**: Assesses query complexity (SIMPLE FACT → MULTI-PART) and plans the search path
-- **Storage filter**: Applies the "telling vs asking" test — only stores genuinely new information
-- **Instruction extractor**: Identifies 8 patterns of prescriptive statements (processes, rules, tool usage, thresholds, etc.) with scope values
-
-**Layer 2 — Agentic Loops** (`memory/layer2.ts`)
-
-Two independent tool-calling loops run concurrently via `Promise.all`:
-
-| Retrieve loop | Store loop |
-|---|---|
-| `search_entity` | `search_entity` |
-| `get_relationships` | `search_facts` |
-| `search_facts` | `store_memory` |
-| `search_events` | `supersede_memory` |
-| `search_plans` | `done` |
-| `search_processes` | |
-| `get_instructions` | |
-| `done` | |
-
-After retrieval, three deterministic safety nets run:
-1. **Instruction pre-fetch** — embedding search for instruction nodes with template dedup
-2. **Broad embedding fallback** — cosine search across all node types
-3. **Global instruction inject** — auto-surfaces scope >= 0.8 instructions
-
-After storage, **reconciliation** checks new instructions against existing ones for conflicts (SUPERSEDES vs CONTRADICTION).
-
-**Context Assembly** (`assembleContext`)
-
-Collects all nodes from L2 results, deduplicates by ID, and organizes into sections with per-type limits:
-
-| Section | Limit |
-|---|---|
-| Entities + relationships | 15 entities, 8 rels each |
-| Instructions | 15, sorted by cosine score (scope as tiebreaker) |
-| Facts + opinions | 30 |
-| Events | 15 |
-| Plans | 10, sorted by scheduled date |
-
-**Curation (Method B)** — Per-section LLM filtering in parallel. Copies relevant records verbatim (no summarization). Preserves exact names, numbers, dates.
-
-**Follow-up Pipeline** — For multi-turn conversations, a lighter pipeline resolves pronouns, fetches only delta context, and runs broadening fallback for uncovered node types.
-
-### Database
-
-SQLite graph database with three tables:
-
-```sql
-nodes    (id, node_type, subtype, content, salience, confidence, source,
-          created_at, valid_from, valid_until, superseded_by, attributes,
-          can_summarize, scope)
-
-edges    (id, source_id, target_id, edge_type, attributes, created_at)
-
-embeddings (node_id, node_type, vector)  -- 1024-dim float32 (Voyage 4)
-```
-
-**Node types**: `entity`, `fact`, `event`, `opinion`, `instruction`, `plan`
-
-**Scope** (instructions and plans): 1.0 = universal, 0.5 = team/tool-wide, 0.2 = entity-specific
-
-**Supersession**: Corrections create a new node and mark the old one with `superseded_by`. Edges are copied to the replacement. Superseded nodes are excluded from all queries.
-
-### Installation
-
-To add the memory system to any Claude Code project:
+Create a `.env` file in the project root:
 
 ```bash
-bun memory/install.ts /path/to/your-project
+OPENROUTER_API_KEY=sk-or-v1-your-key-here
+VOYAGE_API_KEY=pa-your-key-here
 ```
 
-This will:
-1. Copy memory system code to `<project>/memory/`
-2. Configure hooks in `<project>/.claude/settings.json`
-3. Copy the `/octybot-memory` slash command
-4. Initialize data directory at `~/.octybot/projects/<project-id>/memory/`
-
-**Required environment variables** (in `.env` at the project root):
-
-| Variable | Description |
-|---|---|
-| `OPENROUTER_API_KEY` | LLM API access (required) |
-| `VOYAGE_API_KEY` | Embedding model access (required) |
-| `CF_ACCOUNT_ID` | Cloudflare Workers AI (optional fallback) |
-
-**Optional overrides:**
-
-| Variable | Default | Description |
-|---|---|---|
-| `LAYER1` | `openai/gpt-oss-120b` | Classification model |
-| `LAYER2` | `openai/gpt-oss-120b` | Agentic loop model |
-| `VOYAGE_MODEL` | `voyage-4` | Embedding model (1024 dims) |
-| `OCTYBOT_PROJECT` | `basename(cwd)` | Project identifier for data isolation |
-| `DB_PATH` | auto-resolved | Override database path |
-| `OCTY_DEBUG` | `0` | Set to `1` for debug logging |
-
-### Slash Commands
-
-The `/octybot-memory` command provides manual memory management:
+Then install the memory system into your project:
 
 ```bash
-# Search and delete
-/octybot-memory search <keywords>           # find nodes by content
-/octybot-memory delete <node-id> [...]      # delete nodes by ID
-
-# Debug
-/octybot-memory dev-mode enable [logfile]   # enable trace logging
-/octybot-memory dev-mode disable
-/octybot-memory verbose                     # toggle verbose mode
-/octybot-memory trace                       # show latest pipeline trace
-
-# DB profiles
-/octybot-memory list                        # available profiles
-/octybot-memory active                      # current profile + stats
-/octybot-memory load <profile>              # switch to a profile
-/octybot-memory unload                      # clear active DB
-
-# Snapshots
-/octybot-memory freeze list [profile]
-/octybot-memory freeze create <name> [profile]
-/octybot-memory freeze load <name> [profile]
+bun memory/install.ts .
 ```
 
-### Data Layout
+This:
+1. Configures Claude Code hooks in `.claude/settings.json`
+2. Sets up the `/octybot-memory` slash command
+3. Creates the memory database at `~/.octybot/projects/octybot/memory/`
 
-```
-~/.octybot/projects/<project-id>/memory/
-  memory.db                         # active runtime database
-  memory-profile-state.json         # current profile tracking
-  debug/
-    <timestamp>.json                # pipeline traces
-    .dev-mode                       # dev mode flag file
-    .verbose-mode                   # verbose mode flag file
-  profiles/
-    small-baseline.db               # small test dataset
-    noisy-large.db                  # 20K items for scale testing
-  snapshots/<profile>/
-    <snapshot-name>.db              # named restore points
-```
+Memory is now active. Claude will automatically remember and recall information across conversations.
 
-### External Services
+### Memory commands
 
-| Service | Purpose | Pricing |
-|---|---|---|
-| [OpenRouter](https://openrouter.ai) | LLM calls (L1, L1.5, L2, curation) | ~$0.08/M input, $0.36/M output |
-| [Voyage AI](https://voyageai.com) | Embeddings (voyage-4, 1024 dims) | $0.06/M tokens (200M free) |
-| Cloudflare Workers AI | Optional LLM fallback | Per-request pricing |
-| Claude API | Sonnet fallback for empty responses | Standard Anthropic pricing |
-
-Typical cost per conversation turn: ~$0.01-0.03 (retrieve + store).
-
-## Agent Memory Plugin
-
-The runtime agent (`src/agent/`) has a separate, simpler JSON-based memory plugin for the PWA chat:
+Inside Claude Code, use the `/octybot-memory` command:
 
 ```bash
-/octybot memory status          # show memory state
-/octybot memory on|off          # toggle memory
-/octybot memory dev on|off      # toggle trace logging
-/octybot memory forget <query>  # soft-forget matching memories (decay salience)
-/octybot memory backup          # create a timestamped backup snapshot
-/octybot memory freeze <name>   # save named snapshot
-/octybot memory restore <name>  # restore snapshot
-/octybot memory list            # list snapshots
-/octybot memory clear --confirm # wipe all memory (requires --confirm flag)
+/octybot-memory search <keywords>    # find stored memories
+/octybot-memory delete <node-id>     # remove a memory by ID
+/octybot-memory active               # show current DB stats
+/octybot-memory dev-mode enable      # turn on debug logging
+/octybot-memory trace                # view latest pipeline trace
 ```
 
-`clear` requires the `--confirm` flag — without it, you get a warning showing how many entries will be deleted. An automatic backup snapshot is created before clearing, so you can always restore with `/octybot memory restore pre-clear-<timestamp>`.
+### Agent memory plugin
 
-`backup` creates a timestamped snapshot (`backup-2026-02-15T14-30-00`) without needing to choose a name.
+The phone app has its own simpler memory system (separate from the graph memory). Manage it by typing commands in the chat:
 
-Storage: `~/.octybot/memory-plugin.json`, snapshots in `~/.octybot/memory-plugin-snapshots/`
-
-This is independent of the SQL graph memory system — it runs in the agent process and stores memories as JSON.
-
-## Worker
-
-```bash
-cd src/worker
-npm install
-npx wrangler dev                                    # local dev
-npx wrangler deploy                                 # deploy to Cloudflare
-npx wrangler d1 migrations apply octybot-db         # run migrations
+```
+/octybot memory status              # show memory state
+/octybot memory on                  # enable memory
+/octybot memory off                 # disable memory
+/octybot memory backup              # create a backup
+/octybot memory freeze <name>       # save a named snapshot
+/octybot memory restore <name>      # restore a snapshot
+/octybot memory list                # list all snapshots
+/octybot memory clear --confirm     # wipe all memories
 ```
 
-## PWA
-
-Static site — deploy `src/pwa/` to Cloudflare Pages. No build step.
+`clear` requires the `--confirm` flag. Without it, you get a warning showing how many entries will be deleted. A backup is created automatically before clearing.
 
 ## How It Works
 
-1. **Pairing** — The agent registers with the worker and gets a short code (e.g. `SWAN-5705`). You enter the code in the phone app to pair.
-2. **Messaging** — You type a message in the PWA. It's stored in D1 and the agent picks it up via polling.
-3. **Processing** — The agent spawns `claude --print --output-format stream-json`, pipes your message to stdin, and streams response chunks back to the worker.
-4. **Streaming** — The PWA receives chunks via Server-Sent Events and renders them in real time, including tool calls and their results.
+1. **Pairing** -- Your Mac registers with the Cloudflare Worker and gets a short code. You enter the code on your phone to pair the two devices.
+2. **Messaging** -- You type a message on your phone. It's sent to the Worker and stored in the database. Your Mac picks it up by polling.
+3. **Processing** -- Your Mac runs the Claude CLI with your message and streams the response back to the Worker.
+4. **Streaming** -- Your phone receives the response in real time via Server-Sent Events (SSE).
 
-## Benchmarks
+## Architecture
 
-The memory system includes two benchmark suites:
+| Component | Directory | What it does | Runs on |
+|---|---|---|---|
+| Agent | `src/agent/` | Polls for messages, runs Claude, streams responses back | Your Mac |
+| Worker | `src/worker/` | Message queue, device auth, SSE streaming | Cloudflare Workers |
+| PWA | `src/pwa/` | Chat interface | Cloudflare Pages |
+| Memory | `memory/` | Graph-based long-term memory with vector search | Your Mac (SQLite) |
 
-**Standard benchmark** (`benchmark.ts`) — 40 retrieval + 10 store-retrieve queries against a seeded dataset:
-```bash
-bun benchmark.ts                    # full suite
-bun benchmark.ts --only R1,R10,R24  # specific queries
-```
+## Costs
 
-**Curation benchmark** (`test-curation.ts`) — 36 queries against the 20K-item noisy-large dataset:
-```bash
-DB_PATH=~/.octybot/test/memory-noisy-large.db bun test-curation.ts
-DB_PATH=~/.octybot/test/memory-noisy-large.db bun test-curation.ts --only R24,R35
-```
+| Service | What it's used for | Cost |
+|---|---|---|
+| Cloudflare Workers + D1 + Pages | Hosting the worker and PWA | Free tier is plenty |
+| Anthropic API | Claude responses | [Pay per use](https://www.anthropic.com/pricing) |
+| OpenRouter (memory only) | LLM calls for memory classification | ~$0.01-0.03/turn |
+| Voyage AI (memory only) | Vector embeddings for memory search | Free tier (200M tokens) |
 
-Latest results (36 queries, 20K items):
+## Troubleshooting
 
-| Metric | Result |
-|---|---|
-| Hit rate | 100% (88/88) |
-| Full pass | 36/36 |
-| Avg context | 852 chars |
-| Cost per run | $0.06 |
+**"Pairing code expired"** -- The code is valid for 15 minutes. Run `bun src/agent/service.ts uninstall` then `bun src/agent/service.ts install` to get a new one.
 
-## File Structure
+**Agent not responding** -- Check if it's running with `bun src/agent/service.ts status`. Check logs with `bun src/agent/service.ts logs`.
 
-```
-src/
-  agent/
-    index.ts            # polls for messages, spawns claude, streams responses
-    service.ts          # launchd service manager (install/uninstall/start/stop)
-    plugins/memory.ts   # JSON memory plugin for PWA runtime
-  worker/
-    src/index.ts        # Hono API — routes, D1 queries, SSE streaming
-  pwa/
-    index.html          # setup + chat UI
-    app.js              # chat logic, SSE streaming
-    style.css           # mobile-optimized dark theme
-    sw.js               # service worker for offline support
+**"Unauthorized" errors** -- Your device token may have expired. Delete `~/.octybot/device.json` and restart the agent to re-pair.
 
-memory/
-  config.ts             # paths, env vars, model selection
-  db.ts                 # SQLite schema, CRUD, graph queries
-  db-manager.ts         # profile/snapshot management CLI
-  layer1.ts             # LLM classification (entities, intents, operations)
-  layer2.ts             # agentic loops, curation, follow-up pipeline
-  tools.ts              # tool definitions + handlers for L2
-  types.ts              # TypeScript interfaces
-  vectors.ts            # cosine similarity search over embeddings
-  voyage.ts             # Voyage AI embedding client
-  workers-ai.ts         # LLM routing (OpenRouter / CF Workers AI)
-  claude-agent.ts       # Claude CLI adapter (Sonnet fallback)
-  usage-tracker.ts      # token counting and cost calculation
-  debug.ts              # trace logging and dev mode
-  install.ts            # installer for other projects
-  octybot-command.sh    # bash wrapper for slash commands
-  hooks/
-    on-prompt.ts        # UserPromptSubmit — retrieve context before each prompt
-    on-stop.ts          # Stop — store new information after each response
-```
+**Worker errors** -- Check worker logs in the [Cloudflare dashboard](https://dash.cloudflare.com) under Workers & Pages > octybot-worker > Logs.
 
-## Logs
-
-Agent logs are at `~/.octybot/logs/agent.log`. Logs auto-rotate at 10 MB (2 backups kept).
-
-Memory debug traces are written to `~/.octybot/projects/<project-id>/memory/debug/`. Enable dev mode with `/octybot-memory dev-mode enable` and tail the log in a separate terminal.
+**Memory not working** -- Make sure your `.env` file exists in the project root with valid API keys. Run `/octybot-memory active` in Claude Code to check the database status.
