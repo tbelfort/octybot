@@ -1,5 +1,16 @@
 import { readFileSync } from "fs";
-import { join } from "path";
+import { basename, join } from "path";
+
+// Project-aware data paths
+const HOME = process.env.HOME || "~";
+const PROJECT_ID = process.env.OCTYBOT_PROJECT || basename(process.cwd());
+const PROJECT_DATA = join(HOME, ".octybot", "projects", PROJECT_ID, "memory");
+
+export const DB_PATH = process.env.DB_PATH || join(PROJECT_DATA, "memory.db");
+export const DEBUG_DIR = join(PROJECT_DATA, "debug");
+export const PROFILES_DIR = join(PROJECT_DATA, "profiles");
+export const SNAPSHOTS_DIR = join(PROJECT_DATA, "snapshots");
+export const CONVERSATION_STATE_PATH = join(PROJECT_DATA, ".conversation-state.json");
 
 // CF Workers AI (lazy — only throws when actually needed)
 let _cfAccountId: string | null = null;
@@ -57,13 +68,31 @@ export function getWranglerToken(): string {
   return match[1];
 }
 
-// Local DB
-const HOME = process.env.HOME || "~";
-export const DB_PATH = process.env.DB_PATH || join(HOME, ".octybot", "test", "memory.db");
+// Worker URL for cost reporting
+export function getWorkerUrl(): string | null {
+  if (process.env.WORKER_URL) return process.env.WORKER_URL;
+  for (const dir of [process.cwd(), join(process.cwd(), "..")]) {
+    try {
+      const envContent = readFileSync(join(dir, ".env"), "utf-8");
+      const match = envContent.match(/WORKER_URL=(.+)/);
+      if (match) return match[1].trim();
+    } catch {}
+  }
+  return null;
+}
+
+export function getDeviceToken(): string | null {
+  try {
+    const devicePath = join(HOME, ".octybot", "device.json");
+    const data = JSON.parse(readFileSync(devicePath, "utf-8"));
+    return data.token || null;
+  } catch {
+    return null;
+  }
+}
 
 // Debug
 export const DEBUG = process.env.OCTY_DEBUG === "1";
-export const DEBUG_DIR = join(HOME, ".octybot", "test", "debug");
 
 // Limits
 export const MAX_LAYER2_TURNS = 8;

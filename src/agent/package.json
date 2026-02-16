@@ -1,0 +1,8 @@
+{
+  "name": "claude-pa-agent",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run index.ts"
+  }
+}

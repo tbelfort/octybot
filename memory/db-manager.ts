@@ -10,6 +10,7 @@ import {
 } from "fs";
 import { basename, dirname, join } from "path";
 import { Database } from "bun:sqlite";
+import { DB_PATH, PROFILES_DIR, SNAPSHOTS_DIR } from "./config";
 
 interface ActiveState {
   current_profile: string | null;
@@ -23,21 +24,17 @@ interface GraphCounts {
   embeddings: number;
 }
 
-const HOME = process.env.HOME || "~";
-const OCTYBOT_DIR = join(HOME, ".octybot", "test");
-const PROFILE_DIR = join(OCTYBOT_DIR, "profiles");
-const SNAPSHOT_DIR = join(OCTYBOT_DIR, "snapshots");
-const ACTIVE_DB_PATH = join(OCTYBOT_DIR, "memory.db");
-const ACTIVE_STATE_FILE = join(OCTYBOT_DIR, "memory-profile-state.json");
+const ACTIVE_DB_PATH = DB_PATH;
+const ACTIVE_STATE_FILE = join(dirname(DB_PATH), "memory-profile-state.json");
 
 const SMALL_PROFILE = "small-baseline";
 const NOISY_PROFILE = "noisy-large";
-const NOISY_GRAPH_DB_PATH = join(OCTYBOT_DIR, "memory-noisy-large.db");
+const NOISY_GRAPH_DB_PATH = join(dirname(DB_PATH), "memory-noisy-large.db");
 
 function ensureDirs() {
-  mkdirSync(OCTYBOT_DIR, { recursive: true });
-  mkdirSync(PROFILE_DIR, { recursive: true });
-  mkdirSync(SNAPSHOT_DIR, { recursive: true });
+  mkdirSync(dirname(DB_PATH), { recursive: true });
+  mkdirSync(PROFILES_DIR, { recursive: true });
+  mkdirSync(SNAPSHOTS_DIR, { recursive: true });
 }
 
 function defaultState(): ActiveState {
@@ -128,13 +125,13 @@ function readGraphCounts(dbPath: string): GraphCounts | null {
 }
 
 function profilePath(name: string): string {
-  return join(PROFILE_DIR, `${name}.db`);
+  return join(PROFILES_DIR, `${name}.db`);
 }
 
 function listProfileNames(): string[] {
-  if (!existsSync(PROFILE_DIR)) return [];
+  if (!existsSync(PROFILES_DIR)) return [];
   const names: string[] = [];
-  for (const file of readdirSync(PROFILE_DIR)) {
+  for (const file of readdirSync(PROFILES_DIR)) {
     if (!file.endsWith(".db")) continue;
     names.push(basename(file, ".db"));
   }
@@ -152,7 +149,7 @@ function saveProfile(name: string, srcPath: string) {
 }
 
 function snapshotFilePath(profile: string, snapshot: string): string {
-  return join(SNAPSHOT_DIR, profile, `${snapshot}.db`);
+  return join(SNAPSHOTS_DIR, profile, `${snapshot}.db`);
 }
 
 function resolveSnapshotPath(profile: string, snapshot: string): string | null {
@@ -252,7 +249,7 @@ function cmdFreeze(snapshotRaw: string, profileRaw?: string) {
 }
 
 function listSnapshotNames(profile: string): string[] {
-  const dir = join(SNAPSHOT_DIR, profile);
+  const dir = join(SNAPSHOTS_DIR, profile);
   if (!existsSync(dir)) return [];
   const names: string[] = [];
   for (const file of readdirSync(dir)) {
@@ -327,6 +324,264 @@ function cmdInitProfiles() {
     readGraphCounts(profilePath(SMALL_PROFILE)),
     profilePath(SMALL_PROFILE)
   );
+}
+
+function cmdSearch(queryParts: string[]) {
+  const query = queryParts.join(" ").trim();
+  if (!query) throw new Error("Usage: search <query text>");
+  if (!existsSync(ACTIVE_DB_PATH)) throw new Error(`No active DB at ${ACTIVE_DB_PATH}`);
+
+  const db = new Database(ACTIVE_DB_PATH);
+  db.exec("PRAGMA busy_timeout = 3000");
+
+  // Search by content using LIKE with each word
+  const words = query.split(/\s+/).filter(w => w.length > 1);
+  const conditions = words.map(() => "LOWER(n.content) LIKE ?");
+  const params = words.map(w => `%${w.toLowerCase()}%`);
+
+  const sql = `SELECT n.id, n.node_type, n.subtype, n.content, n.created_at
+    FROM nodes n
+    WHERE ${conditions.join(" AND ")}
+      AND n.superseded_by IS NULL
+    ORDER BY n.created_at DESC
+    LIMIT 20`;
+
+  const rows = db.prepare(sql).all(...params) as Array<{
+    id: string; node_type: string; subtype: string | null; content: string; created_at: string;
+  }>;
+  db.close();
+
+  if (rows.length === 0) {
+    console.log(`No nodes found matching: "${query}"`);
+    return;
+  }
+
+  console.log(`Found ${rows.length} node(s) matching "${query}":\n`);
+  for (const row of rows) {
+    const type = row.subtype ? `${row.node_type}/${row.subtype}` : row.node_type;
+    console.log(`  [${type}] ${row.content}`);
+    console.log(`    id: ${row.id} | created: ${row.created_at}`);
+    console.log();
+  }
+}
+
+function cmdDelete(nodeIds: string[]) {
+  if (nodeIds.length === 0) throw new Error("Usage: delete <node-id> [node-id ...]");
+  if (!existsSync(ACTIVE_DB_PATH)) throw new Error(`No active DB at ${ACTIVE_DB_PATH}`);
+
+  const db = new Database(ACTIVE_DB_PATH);
+  db.exec("PRAGMA busy_timeout = 3000");
+
+  let deleted = 0;
+  for (const id of nodeIds) {
+    const node = db.query("SELECT id, node_type, substr(content, 1, 80) as content FROM nodes WHERE id = ?").get(id) as { id: string; node_type: string; content: string } | null;
+    if (!node) {
+      console.log(`  skip: ${id} (not found)`);
+      continue;
+    }
+    db.run("DELETE FROM edges WHERE source_id = ? OR target_id = ?", id, id);
+    db.run("DELETE FROM embeddings WHERE node_id = ?", id);
+    db.run("DELETE FROM nodes WHERE id = ?", id);
+    console.log(`  deleted: [${node.node_type}] ${node.content}`);
+    deleted++;
+  }
+  db.close();
+  console.log(`\nDeleted ${deleted}/${nodeIds.length} node(s).`);
+}
+
+function cmdShow(nameParts: string[]) {
+  const name = nameParts.join(" ").trim();
+  if (!name) throw new Error("Usage: show <entity-name>");
+  if (!existsSync(ACTIVE_DB_PATH)) throw new Error(`No active DB at ${ACTIVE_DB_PATH}`);
+
+  const db = new Database(ACTIVE_DB_PATH);
+  db.exec("PRAGMA busy_timeout = 3000");
+
+  // Find entity by name (case-insensitive)
+  const entities = db.prepare(
+    `SELECT id, node_type, subtype, content, created_at FROM nodes
+     WHERE node_type = 'entity' AND superseded_by IS NULL AND LOWER(content) LIKE ?
+     ORDER BY created_at DESC`
+  ).all(`%${name.toLowerCase()}%`) as Array<{
+    id: string; node_type: string; subtype: string | null; content: string; created_at: string;
+  }>;
+
+  if (entities.length === 0) {
+    console.log(`No entity found matching: "${name}"`);
+    db.close();
+    return;
+  }
+
+  if (entities.length > 1) {
+    console.log(`Multiple entities match "${name}" — pick one:\n`);
+    for (const e of entities) {
+      const type = e.subtype ? `${e.node_type}/${e.subtype}` : e.node_type;
+      console.log(`  [${type}] ${e.content}`);
+      console.log(`    id: ${e.id}`);
+    }
+    db.close();
+    return;
+  }
+
+  const entity = entities[0];
+  console.log(`Entity: ${entity.content}`);
+  console.log(`  id: ${entity.id} | created: ${entity.created_at}\n`);
+
+  // Find all connected nodes via edges
+  const connected = db.prepare(
+    `SELECT DISTINCT n.id, n.node_type, n.subtype, n.content, n.created_at, n.scope
+     FROM nodes n
+     JOIN edges e ON (e.target_id = n.id OR e.source_id = n.id)
+     WHERE (e.source_id = ? OR e.target_id = ?)
+       AND n.id != ?
+       AND n.superseded_by IS NULL
+     ORDER BY n.node_type, n.created_at DESC`
+  ).all(entity.id, entity.id, entity.id) as Array<{
+    id: string; node_type: string; subtype: string | null; content: string; created_at: string; scope: number | null;
+  }>;
+
+  if (connected.length === 0) {
+    console.log("  (no connected nodes)");
+    db.close();
+    return;
+  }
+
+  // Group by type
+  const groups: Record<string, typeof connected> = {};
+  for (const node of connected) {
+    const key = node.node_type;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(node);
+  }
+
+  for (const [type, nodes] of Object.entries(groups)) {
+    console.log(`${type} (${nodes.length}):`);
+    for (const n of nodes) {
+      const label = n.subtype ? `${type}/${n.subtype}` : type;
+      const scopeTag = n.scope != null ? ` scope=${n.scope}` : "";
+      console.log(`  [${label}] ${n.content}`);
+      console.log(`    id: ${n.id}${scopeTag}`);
+    }
+    console.log();
+  }
+
+  console.log(`Total: ${connected.length} connected node(s)`);
+  db.close();
+}
+
+function cmdDeleteEntity(nameParts: string[]) {
+  const name = nameParts.join(" ").trim();
+  if (!name) throw new Error("Usage: delete-entity <entity-name>");
+  if (!existsSync(ACTIVE_DB_PATH)) throw new Error(`No active DB at ${ACTIVE_DB_PATH}`);
+
+  const db = new Database(ACTIVE_DB_PATH);
+  db.exec("PRAGMA busy_timeout = 3000");
+
+  // Find entity by name (case-insensitive)
+  const entities = db.prepare(
+    `SELECT id, content FROM nodes
+     WHERE node_type = 'entity' AND superseded_by IS NULL AND LOWER(content) LIKE ?
+     ORDER BY created_at DESC`
+  ).all(`%${name.toLowerCase()}%`) as Array<{ id: string; content: string }>;
+
+  if (entities.length === 0) {
+    console.log(`No entity found matching: "${name}"`);
+    db.close();
+    return;
+  }
+
+  if (entities.length > 1) {
+    console.log(`Multiple entities match "${name}" — be more specific:\n`);
+    for (const e of entities) {
+      console.log(`  ${e.content} (id: ${e.id})`);
+    }
+    db.close();
+    return;
+  }
+
+  const entity = entities[0];
+  console.log(`Deleting entity: ${entity.content} (${entity.id})\n`);
+
+  // Find all connected node IDs via edges
+  const connectedNodes = db.prepare(
+    `SELECT DISTINCT n.id, n.node_type, n.content FROM nodes n
+     JOIN edges e ON (e.target_id = n.id OR e.source_id = n.id)
+     WHERE (e.source_id = ? OR e.target_id = ?)
+       AND n.id != ?
+       AND n.superseded_by IS NULL`
+  ).all(entity.id, entity.id, entity.id) as Array<{
+    id: string; node_type: string; content: string;
+  }>;
+
+  let deletedNodes = 0;
+  let unlinkedNodes = 0;
+
+  for (const node of connectedNodes) {
+    // Check if this node has edges to OTHER entities (not the one being deleted)
+    const otherEntityEdges = db.prepare(
+      `SELECT 1 FROM edges e
+       JOIN nodes n ON (
+         (e.source_id = n.id AND e.target_id = ?) OR
+         (e.target_id = n.id AND e.source_id = ?)
+       )
+       WHERE n.node_type = 'entity' AND n.id != ?
+       LIMIT 1`
+    ).get(node.id, node.id, entity.id);
+
+    if (otherEntityEdges) {
+      // Connected to other entities — just remove edges to this entity
+      db.run(
+        `DELETE FROM edges WHERE
+         (source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?)`,
+        entity.id, node.id, node.id, entity.id
+      );
+      console.log(`  unlinked: [${node.node_type}] ${node.content.slice(0, 80)}`);
+      unlinkedNodes++;
+    } else {
+      // Only connected to this entity — delete entirely
+      db.run("DELETE FROM edges WHERE source_id = ? OR target_id = ?", node.id, node.id);
+      db.run("DELETE FROM embeddings WHERE node_id = ?", node.id);
+      db.run("DELETE FROM nodes WHERE id = ?", node.id);
+      console.log(`  deleted: [${node.node_type}] ${node.content.slice(0, 80)}`);
+      deletedNodes++;
+    }
+  }
+
+  // Delete the entity itself
+  db.run("DELETE FROM edges WHERE source_id = ? OR target_id = ?", entity.id, entity.id);
+  db.run("DELETE FROM embeddings WHERE node_id = ?", entity.id);
+  db.run("DELETE FROM nodes WHERE id = ?", entity.id);
+  db.close();
+
+  console.log(`\nDone: deleted entity + ${deletedNodes} exclusive node(s), unlinked ${unlinkedNodes} shared node(s).`);
+}
+
+async function cmdUpdate(nodeId: string, contentParts: string[]) {
+  const newContent = contentParts.join(" ").trim();
+  if (!nodeId || !newContent) throw new Error("Usage: update <node-id> <new content>");
+  if (!existsSync(ACTIVE_DB_PATH)) throw new Error(`No active DB at ${ACTIVE_DB_PATH}`);
+
+  // Use db.ts's supersedeNode (shares same DB_PATH)
+  const { supersedeNode, getNode, closeDb } = await import("./db");
+  const { embed } = await import("./voyage");
+  const { storeEmbedding } = await import("./vectors");
+
+  const oldNode = getNode(nodeId);
+  if (!oldNode) throw new Error(`Node not found: ${nodeId}`);
+
+  const oldContent = oldNode.content;
+  const newId = supersedeNode(nodeId, newContent);
+
+  // Re-embed the new node
+  const [vector] = await embed([newContent], "document");
+  storeEmbedding(newId, oldNode.node_type, vector);
+
+  closeDb();
+
+  console.log(`Updated [${oldNode.node_type}]:`);
+  console.log(`  old: ${oldContent}`);
+  console.log(`  new: ${newContent}`);
+  console.log(`  old_id: ${nodeId} → new_id: ${newId}`);
 }
 
 function cmdBuildNoisyLarge() {
@@ -408,19 +663,24 @@ function printHelp() {
   console.log("  freeze list [profile]");
   console.log("  freeze load <snapshot> [profile]");
   console.log("  freeze create <snapshot> [profile]");
+  console.log("  search <query text>              # find nodes by content");
+  console.log("  delete <node-id> [node-id ...]   # delete nodes by ID");
+  console.log("  show <entity-name>               # show entity + all connected nodes");
+  console.log("  delete-entity <entity-name>      # delete entity + cascade connected nodes");
+  console.log("  update <node-id> <new content>   # supersede node with new content + re-embed");
   console.log("  (legacy aliases still supported: current, snapshots, restore)");
   console.log("  init-profiles            # copy active small DB into profile storage");
   console.log("  build-noisy-large        # generate a large noisy graph DB and register profile");
   console.log("  bootstrap                # init-profiles + build-noisy-large");
   console.log("");
   console.log("Profile storage:");
-  console.log(`  ${PROFILE_DIR}`);
+  console.log(`  ${PROFILES_DIR}`);
   console.log("");
   console.log("Snapshot storage:");
-  console.log(`  ${SNAPSHOT_DIR}`);
+  console.log(`  ${SNAPSHOTS_DIR}`);
 }
 
-function main() {
+async function main() {
   const helpTokens = new Set(["help", "--help", "-h"]);
   let args = process.argv.slice(2);
 
@@ -455,6 +715,22 @@ function main() {
         break;
       case "unload":
         cmdUnload();
+        break;
+      case "search":
+        cmdSearch(args.slice(1));
+        break;
+      case "delete":
+        cmdDelete(args.slice(1));
+        break;
+      case "show":
+        cmdShow(args.slice(1));
+        break;
+      case "delete-entity":
+        cmdDeleteEntity(args.slice(1));
+        break;
+      case "update":
+        if (!arg1) throw new Error("Usage: update <node-id> <new content>");
+        await cmdUpdate(arg1, args.slice(2));
         break;
       case "freeze":
         cmdFreezeRouting(args.slice(1));

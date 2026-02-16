@@ -4,7 +4,7 @@ import type { Layer1Result, ChatMessage } from "./types";
 
 const SYSTEM_PROMPT = `You are a memory classification model. Given a user message, perform three tasks:
 
-1. EXTRACT all entities, implied facts, events, opinions, concepts, and implied processes.
+1. EXTRACT all entities, implied facts, events, plans, opinions, concepts, and implied processes.
 2. CLASSIFY the intent(s). A message can have MULTIPLE intents:
    - action: user wants something executed
    - information: user wants to know something
@@ -26,11 +26,13 @@ const SYSTEM_PROMPT = `You are a memory classification model. Given a user messa
 
    If the user mentions ANY entities or asks ANY question, retrieve MUST be true.
    If the user states something as new fact (e.g. "Peter moved to X", "We switched to Y"), store MUST be true.
+   If the user mentions a future plan/scheduled item (e.g. "Dave is going on holiday March 3rd"), store MUST be true.
 
 Rules:
 - Extract what is EXPLICITLY mentioned and what is IMPLICITLY referenced.
 - Mark entities as ambiguous if there's no qualifier (e.g. just a first name).
 - "implied_facts" = SPECIFIC, NON-OBVIOUS facts stated or strongly implied. Only include facts that contain concrete details (names, numbers, roles, dates, relationships). EXCLUDE: common sense, tautologies, vague predictions, and things anyone would know without being told. Bad: "articles can be AI or human written". Good: "Jeff handles AI detection checks".
+- "plans" = future scheduled things with specific dates or timeframes. "Dave is going on holiday March 3rd", "Anderson delivery due next Friday", "Team meeting rescheduled to Thursday". NOT past events.
 - "concepts" = abstract topics or domains referenced.
 - "implied_processes" = if the message implies a known procedure.
 - If a field has no entries, use an empty array.
@@ -42,6 +44,7 @@ Schema:
   "entities": [{ "name": "string", "type": "person|org|project|place|tool|process|document|concept|event|account", "ambiguous": boolean }],
   "implied_facts": ["string"],
   "events": ["string"],
+  "plans": ["string"],
   "opinions": ["string"],
   "concepts": ["string"],
   "implied_processes": ["string"],
@@ -53,6 +56,7 @@ const DEFAULT_RESULT: Layer1Result = {
   entities: [],
   implied_facts: [],
   events: [],
+  plans: [],
   opinions: [],
   concepts: [],
   implied_processes: [],
@@ -72,6 +76,7 @@ function tryParse(raw: string): Layer1Result | null {
       entities: Array.isArray(parsed.entities) ? parsed.entities : [],
       implied_facts: Array.isArray(parsed.implied_facts) ? parsed.implied_facts : [],
       events: Array.isArray(parsed.events) ? parsed.events : [],
+      plans: Array.isArray(parsed.plans) ? parsed.plans : [],
       opinions: Array.isArray(parsed.opinions) ? parsed.opinions : [],
       concepts: Array.isArray(parsed.concepts) ? parsed.concepts : [],
       implied_processes: Array.isArray(parsed.implied_processes) ? parsed.implied_processes : [],
@@ -104,13 +109,18 @@ function fallbackClassify(prompt: string): Layer1Result {
       entities.push({ name: w, type: "concept" as any, ambiguous: true });
     }
   }
+
+  // Fallback = L1 completely failed. Store the whole prompt as a fact — better to
+  // over-store than miss important info. The storage filter will discard noise.
   console.error(`[layer1] Fallback classification for: "${prompt.slice(0, 60)}..." — extracted ${entities.length} entities`);
   return {
     ...DEFAULT_RESULT,
     entities,
+    implied_facts: [prompt],
+    plans: [],
     concepts: [prompt.slice(0, 100)],
     intents: ["information"],
-    operations: { retrieve: true, store: false },
+    operations: { retrieve: true, store: true },
   };
 }
 
@@ -122,36 +132,149 @@ export interface ClassifyResult {
   fallback: boolean;
 }
 
-export async function classify(prompt: string): Promise<ClassifyResult> {
-  const start = Date.now();
+// ── Sentence splitting ────────────────────────────────────────────────
+
+const ABBREVIATIONS = /\b(?:Mr|Mrs|Ms|Dr|Sr|Jr|Prof|Inc|Ltd|Corp|etc|vs|approx|dept|govt|e\.g|i\.e)\.\s/g;
+
+function splitSentences(text: string): string[] {
+  // Protect abbreviations from splitting
+  let safe = text;
+  const abbrs: { placeholder: string; original: string }[] = [];
+  safe = safe.replace(ABBREVIATIONS, (match) => {
+    const ph = `__ABBR${abbrs.length}__ `;
+    abbrs.push({ placeholder: ph.trim(), original: match.trimEnd() });
+    return ph;
+  });
+
+  // Split on sentence-ending punctuation followed by space + uppercase/quote
+  const parts = safe.split(/(?<=[.!?])\s+(?=[A-Z"'(])/)
+    .map(s => {
+      let restored = s;
+      for (const { placeholder, original } of abbrs) {
+        restored = restored.replace(placeholder, original);
+      }
+      return restored.trim();
+    })
+    .filter(s => s.length > 0);
+
+  return parts.length > 0 ? parts : [text];
+}
+
+// ── Single-sentence classification ────────────────────────────────────
+
+async function classifySingle(
+  sentence: string,
+  fullMessage?: string,
+  conversationContext?: string
+): Promise<{ result: Layer1Result | null; raw: string }> {
+  let userContent: string;
+  if (fullMessage && fullMessage !== sentence) {
+    userContent = `Full message (for pronoun/reference resolution):\n"${fullMessage}"\n\nClassify THIS specific sentence:\n"${sentence}"`;
+  } else {
+    userContent = sentence;
+  }
+  // Prepend conversation context if provided (for resolving pronouns across turns)
+  if (conversationContext) {
+    userContent = conversationContext + userContent;
+  }
+
   const messages: ChatMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: prompt },
+    { role: "user", content: userContent },
   ];
 
-  // Attempt 1
   const response = await callWorkersAI(LAYER1_MODEL, messages, {
-    max_tokens: 1024,
     temperature: 0.1,
     tag: "l1",
   });
 
   const result = tryParse(response.content);
-  if (result) return { result, raw: response.content, duration_ms: Date.now() - start, retried: false, fallback: false };
+  if (result) return { result, raw: response.content };
 
-  // Attempt 2: retry with slightly higher temperature
-  console.error(`[layer1] Parse failed, retrying... Raw: ${response.content.slice(0, 100)}`);
+  // One retry with higher temperature
   const retry = await callWorkersAI(LAYER1_MODEL, messages, {
-    max_tokens: 1024,
     temperature: 0.3,
     tag: "l1",
   });
+  return { result: tryParse(retry.content), raw: retry.content };
+}
 
-  const retryResult = tryParse(retry.content);
-  if (retryResult) return { result: retryResult, raw: `[attempt1] ${response.content}\n[attempt2] ${retry.content}`, duration_ms: Date.now() - start, retried: true, fallback: false };
+// ── Merge per-sentence results ────────────────────────────────────────
 
-  // Both attempts failed — use fallback
-  console.error(`[layer1] Retry also failed. Raw: ${retry.content.slice(0, 100)}`);
-  console.error(`[layer1] Using fallback classification.`);
-  return { result: fallbackClassify(prompt), raw: `[attempt1] ${response.content}\n[attempt2] ${retry.content}\n[fallback]`, duration_ms: Date.now() - start, retried: true, fallback: true };
+function mergeResults(results: Layer1Result[]): Layer1Result {
+  // Dedupe entities by lowercase name
+  const entityMap = new Map<string, Layer1Result["entities"][0]>();
+  for (const r of results) {
+    for (const e of r.entities) {
+      const key = e.name.toLowerCase();
+      if (!entityMap.has(key)) entityMap.set(key, e);
+    }
+  }
+
+  return {
+    entities: [...entityMap.values()],
+    implied_facts: results.flatMap(r => r.implied_facts),
+    events: results.flatMap(r => r.events),
+    plans: results.flatMap(r => r.plans),
+    opinions: results.flatMap(r => r.opinions),
+    concepts: [...new Set(results.flatMap(r => r.concepts))],
+    implied_processes: results.flatMap(r => r.implied_processes),
+    intents: [...new Set(results.flatMap(r => r.intents))] as Layer1Result["intents"],
+    operations: {
+      retrieve: results.some(r => r.operations.retrieve),
+      store: results.some(r => r.operations.store),
+    },
+  };
+}
+
+// ── Public entry point ────────────────────────────────────────────────
+
+export async function classify(prompt: string, conversationContext?: string): Promise<ClassifyResult> {
+  const start = Date.now();
+  const sentences = splitSentences(prompt);
+
+  // Build context prefix for pronoun resolution
+  // (e.g., Claude's response that clarifies who "her" or "he" refers to)
+  const contextPrefix = conversationContext
+    ? `[Conversation context for pronoun/reference resolution — do NOT extract facts from this]\n${conversationContext}\n\n`
+    : undefined;
+
+  // Single sentence — classify directly (no overhead)
+  if (sentences.length <= 1) {
+    const { result, raw } = await classifySingle(prompt, undefined, contextPrefix);
+    if (result) return { result, raw, duration_ms: Date.now() - start, retried: false, fallback: false };
+
+    console.error(`[layer1] Using fallback classification.`);
+    return { result: fallbackClassify(prompt), raw: `${raw}\n[fallback]`, duration_ms: Date.now() - start, retried: true, fallback: true };
+  }
+
+  // Multiple sentences — classify each in parallel with full message as context
+  const promises = sentences.map(s => classifySingle(s, prompt, contextPrefix));
+  const settled = await Promise.all(promises);
+
+  const good: Layer1Result[] = [];
+  const raws: string[] = [];
+  for (let i = 0; i < settled.length; i++) {
+    raws.push(`[s${i + 1}] ${settled[i].raw}`);
+    if (settled[i].result) good.push(settled[i].result!);
+  }
+
+  if (good.length === 0) {
+    console.error(`[layer1] All ${sentences.length} sentence classifications failed, using fallback.`);
+    return { result: fallbackClassify(prompt), raw: raws.join("\n") + "\n[fallback]", duration_ms: Date.now() - start, retried: true, fallback: true };
+  }
+
+  const merged = mergeResults(good);
+
+  // Safety net: if the LLM returned valid JSON but extracted nothing useful
+  // from a non-trivial prompt, treat it as a classification failure
+  const hasAnything = merged.entities.length > 0 || merged.implied_facts.length > 0 ||
+    merged.events.length > 0 || merged.plans.length > 0 || merged.opinions.length > 0;
+  const isNonTrivial = prompt.split(/\s+/).length >= 4;
+  if (!hasAnything && isNonTrivial) {
+    console.error(`[layer1] LLM returned empty classification for non-trivial prompt, using fallback.`);
+    return { result: fallbackClassify(prompt), raw: raws.join("\n") + "\n[empty-fallback]", duration_ms: Date.now() - start, retried: false, fallback: true };
+  }
+
+  return { result: merged, raw: raws.join("\n"), duration_ms: Date.now() - start, retried: false, fallback: false };
 }

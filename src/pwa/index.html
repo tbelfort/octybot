@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0a0a0a">
+  <title>Claude PA</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+</head>
+<body>
+  <div id="viewport">
+
+  <!-- Setup Screen -->
+  <div id="setup">
+    <h1>Octybot</h1>
+    <p>Enter the pairing code shown on your home agent.</p>
+    <input id="setup-code" type="text" placeholder="WOLF-3847" autocomplete="off" maxlength="9" style="text-align:center;font-size:24px;letter-spacing:2px;text-transform:uppercase;">
+    <button id="setup-save">Pair</button>
+    <p id="setup-error" style="color:var(--error);display:none;"></p>
+  </div>
+
+  <!-- Main App -->
+  <div id="app">
+    <header>
+      <button class="header-btn" id="menu-btn" aria-label="Menu">&#9776;</button>
+      <h2 id="conv-title">New Chat</h2>
+      <span id="session-badge" class="session-badge hidden">
+        <span class="session-dot"></span>
+        Claude Code Running
+        <button id="session-stop-btn" class="session-stop">Stop</button>
+      </span>
+      <button class="header-btn" id="settings-btn" aria-label="Settings">&#9881;</button>
+    </header>
+
+    <!-- Sidebar -->
+    <div id="sidebar-overlay"></div>
+    <nav id="sidebar">
+      <div class="sidebar-header">
+        <h3>Chats</h3>
+        <button id="new-chat-btn">+ New</button>
+      </div>
+      <div id="conv-list"></div>
+    </nav>
+
+    <!-- Messages -->
+    <div id="messages">
+      <div class="empty-state">
+        <span>&#128172;</span>
+        <p>Send a message to start</p>
+      </div>
+    </div>
+
+    <!-- Input -->
+    <div id="input-bar">
+      <button class="input-btn" id="voice-btn" aria-label="Voice input">&#127908;</button>
+      <textarea id="msg-input" rows="1" placeholder="Message Claude..."></textarea>
+      <button class="input-btn" id="tts-btn" aria-label="Toggle TTS">&#128264;</button>
+      <button class="input-btn" id="send-btn" aria-label="Send" disabled>&#10148;</button>
+      <button class="input-btn" id="stop-btn" aria-label="Stop" style="display:none">&#9632;</button>
+    </div>
+  </div>
+  <!-- Hands-Free Mode -->
+  <div id="handsfree-overlay" class="handsfree-overlay hidden">
+    <div class="handsfree-bg"></div>
+    <div class="handsfree-center">
+      <div id="handsfree-orb" class="handsfree-orb green"></div>
+      <div id="handsfree-label" class="handsfree-label">Tap to speak</div>
+    </div>
+    <button id="handsfree-exit" class="handsfree-exit">Exit</button>
+  </div>
+
+  <!-- Settings Modal -->
+  <div id="settings-overlay">
+    <div id="settings-panel">
+      <h3>Settings</h3>
+      <div class="settings-item">
+        <span class="label">Model</span>
+        <span class="value" id="settings-model">Opus</span>
+      </div>
+      <div class="settings-item">
+        <span class="label">Device</span>
+        <span class="value" id="settings-device">—</span>
+      </div>
+      <button id="usage-btn">View Usage &amp; Costs</button>
+      <div class="settings-divider"></div>
+      <div class="settings-item">
+        <span class="label">Session Timeout</span>
+        <span class="value"><input type="number" id="settings-timeout" min="1" max="168" value="24" class="settings-num-input"> hrs</span>
+      </div>
+      <div class="settings-item">
+        <span class="label">Max Sessions</span>
+        <span class="value"><input type="number" id="settings-pool-max" min="1" max="10" value="3" class="settings-num-input"></span>
+      </div>
+      <button id="settings-save-btn" class="settings-save-btn">Save Settings</button>
+      <button id="logout-btn">Unpair Device</button>
+    </div>
+  </div>
+
+  <!-- Usage Overlay -->
+  <div id="usage-overlay">
+    <div id="usage-panel">
+      <div class="usage-header">
+        <button id="usage-close">&larr;</button>
+        <h3>Usage &amp; Costs</h3>
+        <div class="usage-tabs">
+          <button class="usage-tab active" data-tab="daily">Daily</button>
+          <button class="usage-tab" data-tab="monthly">Monthly</button>
+        </div>
+      </div>
+      <div id="usage-content">
+        <p class="usage-loading">Loading...</p>
+      </div>
+    </div>
+  </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

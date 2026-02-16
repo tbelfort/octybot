@@ -1,0 +1,11 @@
+name = "octybot-worker"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[vars]
+ENVIRONMENT = "production"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "octybot-db"
+database_id = "8d9951bc-3a98-421b-8c31-0eb7b118fb8c"
