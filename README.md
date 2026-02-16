@@ -140,7 +140,7 @@ bun src/agent/index.ts
 
 **Voice mode** — Hold-to-talk voice input with transcription, and text-to-speech responses.
 
-**Memory system** — Optional long-term memory that lets Claude remember people, facts, events, and instructions across conversations using a graph database with vector search. See [Memory](#memory-system-optional) below.
+**Long-term memory** — Claude normally forgets everything between conversations. Octybot gives it permanent memory — people, facts, events, preferences, instructions — stored in a local graph database with vector search. It remembers what you told it last week the same way a person would. See [Memory](#long-term-memory) below.
 
 ## Architecture
 
@@ -149,7 +149,7 @@ bun src/agent/index.ts
 | Agent | `src/agent/` | Your computer — polls for messages, runs Claude, manages process pool |
 | Worker | `src/worker/` | Cloudflare Workers (free) — message queue, auth, SSE streaming |
 | PWA | `src/pwa/` | Cloudflare Pages (free) — chat UI, sessions, settings |
-| Memory | `memory/` | Your computer — graph-based long-term memory (SQLite) |
+| Memory | `memory/` | Your computer — permanent memory graph (SQLite + vector search) |
 | Deploy | `deploy.ts` | Deploys everything in one command |
 
 ## Deploying Updates
@@ -162,13 +162,19 @@ bun deploy.ts pwa           # PWA only
 bun deploy.ts agent         # reinstall agent service
 ```
 
-## Memory System (Optional)
+## Long-Term Memory
 
-The memory system gives Claude persistent context across conversations. It remembers people, facts, events, plans, and instructions using a graph database with vector search.
+Without memory, every Claude conversation starts from zero. Octybot changes that. It gives Claude near-human permanent memory — the kind where you mention your sister's name once and it just knows it from then on.
 
-Memory works automatically through Claude Code hooks — no manual commands needed. Before each prompt, it retrieves relevant context. After each response, it stores new information.
+Under the hood, it's a graph database with vector search running locally on your machine. Entities (people, places, projects), facts, events, preferences, and instructions are stored as nodes with relationships between them. Every time you talk to Claude, a two-stage pipeline automatically retrieves what's relevant and stores what's new. You never interact with it directly — it just works.
 
-### Setup
+The retrieval pipeline uses an agentic search loop: a reasoning layer classifies your query, plans a search strategy, and an LLM-driven tool loop searches entities, facts, events, and instructions until it has enough context. Three deterministic safety nets ensure nothing critical gets missed. A curation layer then filters the results down to only what matters for this specific conversation.
+
+The storage pipeline runs in parallel: it classifies what's new in your conversation, searches for existing related memories, and either creates new nodes or supersedes old ones. If you correct a fact ("actually my sister's name is Sarah, not Sara"), it updates automatically.
+
+The result: Claude builds a persistent, evolving understanding of your world across every conversation. It knows your team, your projects, your preferences, your rules — without you ever having to repeat yourself.
+
+### Setting up memory
 
 You need API keys from two services (both have free tiers):
 
