@@ -1,5 +1,5 @@
 // ---- Config ----
-const WORKER_URL = "https://octybot-worker.tom-adf.workers.dev";
+const WORKER_URL = "https://octybot-worker.YOUR-SUBDOMAIN.workers.dev";
 const TTS_BATCH_SIZE = 5;
 const TITLE_MAX_LENGTH = 30;
 let TOKEN = localStorage.getItem("token") || "";
