@@ -12,6 +12,7 @@
  */
 
 import { resolve } from "path";
+import { readFileSync } from "fs";
 
 const ROOT = resolve(import.meta.dir);
 const WORKER_DIR = resolve(ROOT, "src/worker");
@@ -34,7 +35,7 @@ function fail(msg: string) {
 async function run(
   cmd: string[],
   opts: { cwd?: string; label?: string } = {}
-): Promise<boolean> {
+): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   const label = opts.label ?? cmd.join(" ");
   const proc = Bun.spawn(cmd, {
     cwd: opts.cwd ?? ROOT,
@@ -52,11 +53,11 @@ async function run(
     fail(label);
     const output = (stderr || stdout).trim();
     if (output) console.error(`    ${output.split("\n").join("\n    ")}`);
-    return false;
+    return { ok: false, stdout, stderr };
   }
 
   ok(label);
-  return true;
+  return { ok: true, stdout, stderr };
 }
 
 // ── Deploy Steps ─────────────────────────────────────────────────────
@@ -64,19 +65,29 @@ async function run(
 async function deployWorker(): Promise<boolean> {
   console.log("\nDeploying Worker...");
 
+  // Guard: check for placeholder database_id
+  try {
+    const toml = readFileSync(resolve(WORKER_DIR, "wrangler.toml"), "utf-8");
+    if (toml.includes('"REPLACE_ME"')) {
+      fail("wrangler.toml has placeholder database_id");
+      console.error('    Run "bun setup.ts" first to configure the D1 database.');
+      return false;
+    }
+  } catch {}
+
   // Run migrations
   const migrated = await run(
     ["npx", "wrangler", "d1", "migrations", "apply", D1_DATABASE, "--remote"],
     { cwd: WORKER_DIR, label: "D1 migrations applied" }
   );
-  if (!migrated) return false;
+  if (!migrated.ok) return false;
 
   // Deploy worker
   const deployed = await run(
     ["npx", "wrangler", "deploy"],
     { cwd: WORKER_DIR, label: "Worker deployed" }
   );
-  return deployed;
+  return deployed.ok;
 }
 
 async function deployPWA(): Promise<boolean> {
@@ -91,7 +102,7 @@ async function deployPWA(): Promise<boolean> {
     ],
     { cwd: PWA_DIR, label: `PWA deployed to ${PAGES_PROJECT}.pages.dev` }
   );
-  return deployed;
+  return deployed.ok;
 }
 
 async function deployAgent(): Promise<boolean> {
@@ -101,7 +112,7 @@ async function deployAgent(): Promise<boolean> {
     ["bun", AGENT_SERVICE, "install"],
     { label: "Agent service installed" }
   );
-  return installed;
+  return installed.ok;
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────
