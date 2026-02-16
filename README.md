@@ -19,25 +19,48 @@ Octybot wraps Claude Code with a mobile chat interface, real-time streaming, voi
 
 ## Quick Start
 
-### 1. Install tools
+### Option A: Claude Code (recommended)
+
+Install [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), clone the repo, and let Claude handle the rest:
 
 ```bash
-# Install Bun (JavaScript runtime)
+npm install -g @anthropic-ai/claude-code
+git clone https://github.com/tbelfort/octybot.git
+cd octybot
+claude
+```
+
+Then say **"set this up"**. Claude reads the included setup instructions and runs everything — installs tools, creates Cloudflare resources, deploys, patches configs. You just authenticate when prompted and paste your API key.
+
+### Option B: Automated script
+
+If you already have [Bun](https://bun.sh) and [Node.js](https://nodejs.org) installed:
+
+```bash
+git clone https://github.com/tbelfort/octybot.git
+cd octybot
+bun setup.ts
+```
+
+The script walks you through everything interactively. It's idempotent — safe to re-run if anything fails.
+
+### Option C: Manual setup
+
+<details>
+<summary>Step-by-step manual installation</summary>
+
+#### 1. Install tools
+
+```bash
 curl -fsSL https://bun.sh/install | bash
-
-# Install Wrangler (Cloudflare CLI) and Claude Code
 npm install -g wrangler @anthropic-ai/claude-code
-
-# Clone and enter the project
 git clone https://github.com/tbelfort/octybot.git
 cd octybot
 ```
 
 If you don't have `npm`, install [Node.js LTS](https://nodejs.org) first. After installing Claude Code, run `claude` once and sign in.
 
-### 2. Set up Cloudflare
-
-Log in to Cloudflare and create the database:
+#### 2. Set up Cloudflare
 
 ```bash
 npx wrangler login
@@ -59,7 +82,7 @@ npx wrangler secret put OPENAI_API_KEY
 
 The OpenAI key is used for voice transcription and text-to-speech. Get one at [platform.openai.com/api-keys](https://platform.openai.com/api-keys).
 
-Create the Pages project and install worker dependencies:
+Create the Pages project and install dependencies:
 
 ```bash
 npx wrangler pages project create octybot-pwa
@@ -67,7 +90,7 @@ cd src/worker && npm install && cd ../..
 bun install
 ```
 
-### 3. Deploy (twice)
+#### 3. Deploy (twice)
 
 The first deploy creates your Worker URL. The second deploy bakes that URL into the app.
 
@@ -88,21 +111,23 @@ Then deploy again:
 bun deploy.ts
 ```
 
-### 4. Start the agent
-
-Install it as a background service:
+#### 4. Start the agent
 
 ```bash
 bun src/agent/service.ts install
 ```
 
-A pairing code appears (like `WOLF-3847`). The service starts automatically on login, restarts on crash, and **prevents your computer from sleeping** so the agent is always reachable.
+A pairing code appears (like `WOLF-3847`). The service starts automatically on login, restarts on crash, and prevents your computer from sleeping.
 
-### 5. Pair your phone
+#### 5. Pair your phone
 
 Open `https://octybot-pwa.pages.dev` in your phone's browser. Enter the pairing code. Start chatting.
 
-Add it to your home screen for a native app feel (Safari > Share > Add to Home Screen).
+</details>
+
+### After setup
+
+Add the PWA to your home screen for a native app feel (Safari > Share > Add to Home Screen).
 
 ## How It Stays Alive
 
