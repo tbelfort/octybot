@@ -263,9 +263,13 @@ Named volumes persist Cloudflare and Claude auth between sessions. `docker compo
 |---------|---------|------|
 | Cloudflare Workers + D1 + Pages | Worker, database, PWA hosting | Free |
 | Claude Code | AI responses | [Anthropic pricing](https://www.anthropic.com/pricing) |
-| OpenAI (optional) | Voice transcription + TTS | Pay per use |
-| OpenRouter (memory only) | Memory classification LLM | ~$0.01–0.03/turn |
-| Voyage AI (memory only) | Vector embeddings | Free (200M tokens) |
+| OpenAI (optional) | Voice transcription + TTS | ~$50–100/mo with heavy voice usage |
+| OpenRouter (memory only) | Memory classification LLM (OSS-120B) | A few $/mo with heavy usage |
+| Voyage AI (memory only) | Vector embeddings | Free (200M tokens, $5 deposit to activate) |
+
+**Memory** requires two API keys: [OpenRouter](https://openrouter.ai) and [Voyage AI](https://voyageai.com). OpenRouter runs OSS-120B for memory classification — with heavy usage expect a few dollars a month. Voyage AI provides vector embeddings and is effectively free (200M tokens), but you need to deposit $5 to activate your account.
+
+**Voice chat** requires an [OpenAI](https://platform.openai.com/api-keys) API key for transcription and text-to-speech. Transcription is cheap, but TTS adds up — heavy voice usage will run $50–100/month. Text-only chat doesn't need this key at all.
 
 ## Troubleshooting
 
