@@ -22,6 +22,10 @@ import { join } from "path";
 const WORKER_URL = "https://octybot-worker.tom-adf.workers.dev";
 const POLL_INTERVAL = 1000;
 const PAIR_POLL_INTERVAL = 2000;
+const STOP_CHECK_INTERVAL_MS = 10_000;
+const SETTINGS_REFRESH_INTERVAL_MS = 60_000;
+const DEFAULT_MODEL = "opus";
+const SYSTEM_PROMPT = "You are a personal assistant accessed via a mobile app. Focus ONLY on the user's message. Ignore any internal system messages about pending tasks, session restores, or previous sessions — those are artifacts of the CLI and not relevant to this conversation.";
 const CONFIG_DIR = join(homedir(), ".octybot");
 const CONFIG_FILE = join(CONFIG_DIR, "device.json");
 
@@ -106,8 +110,14 @@ async function registerAndPair(): Promise<DeviceConfig> {
   console.log("└─────────────────────────────────┘\n");
   console.log(`Code expires at ${new Date(expires_at).toLocaleTimeString()}\n`);
 
-  // Poll until paired
+  // Poll until paired (with expiry timeout)
+  const expiresAt = new Date(expires_at).getTime();
   while (true) {
+    if (Date.now() > expiresAt) {
+      console.error("Pairing code expired. Please restart the agent.");
+      process.exit(1);
+    }
+
     const statusResp = await fetch(`${WORKER_URL}/devices/${device_id}/status`);
     if (!statusResp.ok) {
       console.error("Status poll error:", statusResp.status);
@@ -147,6 +157,7 @@ interface ProcessEntry {
 }
 
 const processPool = new Map<string, ProcessEntry>();
+const activeStopRequests = new Set<string>();
 let poolMax = 3;
 let idleTimeoutMs = 24 * 3600 * 1000;
 
@@ -158,9 +169,9 @@ function buildClaudeArgs(sessionId: string | null, model: string): string[] {
     "stream-json",
     "--dangerously-skip-permissions",
     "--model",
-    model || "opus",
+    model || DEFAULT_MODEL,
     "--append-system-prompt",
-    "You are a personal assistant accessed via a mobile app. Focus ONLY on the user's message. Ignore any internal system messages about pending tasks, session restores, or previous sessions — those are artifacts of the CLI and not relevant to this conversation.",
+    SYSTEM_PROMPT,
   ];
 
   if (sessionId) {
@@ -168,6 +179,16 @@ function buildClaudeArgs(sessionId: string | null, model: string): string[] {
   }
 
   return args;
+}
+
+function spawnClaude(sessionId: string | null, model: string) {
+  const args = buildClaudeArgs(sessionId, model);
+  return Bun.spawn(["claude", ...args], {
+    cwd: join(import.meta.dir, "../.."),
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
 }
 
 async function reportProcessStatus(convId: string, status: string | null) {
@@ -181,21 +202,15 @@ async function reportProcessStatus(convId: string, status: string | null) {
   }
 }
 
-function spawnPreWarmedProcess(
+async function spawnPreWarmedProcess(
   convId: string,
   sessionId: string,
   model: string
-): ProcessEntry {
+): Promise<ProcessEntry> {
   // Evict LRU if pool is full
-  evictLRU();
+  await evictLRU();
 
-  const args = buildClaudeArgs(sessionId, model);
-  const proc = Bun.spawn(["claude", ...args], {
-    cwd: join(import.meta.dir, "../.."),
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const proc = spawnClaude(sessionId, model);
 
   const entry: ProcessEntry = {
     proc,
@@ -219,33 +234,35 @@ function spawnPreWarmedProcess(
     }
   });
 
-  reportProcessStatus(convId, "warm");
+  await reportProcessStatus(convId, "warm");
   console.log(`  Pre-warmed process for ${convId} (session: ${sessionId.slice(0, 8)}...)`);
 
   return entry;
 }
 
-function evictLRU() {
-  if (processPool.size < poolMax) return;
+async function evictLRU() {
+  while (processPool.size >= poolMax) {
+    let oldest: ProcessEntry | null = null;
+    let oldestKey = "";
 
-  let oldest: ProcessEntry | null = null;
-  let oldestKey = "";
-
-  for (const [key, entry] of processPool) {
-    if (entry.state === "active") continue;
-    if (!oldest || entry.lastUsedAt < oldest.lastUsedAt) {
-      oldest = entry;
-      oldestKey = key;
+    for (const [key, entry] of processPool) {
+      if (entry.state === "active") continue;
+      if (!oldest || entry.lastUsedAt < oldest.lastUsedAt) {
+        oldest = entry;
+        oldestKey = key;
+      }
     }
-  }
 
-  if (oldest) {
-    console.log(`  Evicting LRU process for ${oldestKey}`);
-    killProcess(oldestKey);
+    if (oldest) {
+      console.log(`  Evicting LRU process for ${oldestKey}`);
+      await killProcess(oldestKey);
+    } else {
+      break; // all remaining are active, can't evict
+    }
   }
 }
 
-function killProcess(convId: string) {
+async function killProcess(convId: string) {
   const entry = processPool.get(convId);
   if (!entry) return;
 
@@ -255,7 +272,7 @@ function killProcess(convId: string) {
     // Process may already be dead
   }
   processPool.delete(convId);
-  reportProcessStatus(convId, null);
+  await reportProcessStatus(convId, null);
 }
 
 async function checkStopRequests() {
@@ -268,9 +285,10 @@ async function checkStopRequests() {
       const entry = processPool.get(convId);
       if (entry && entry.state !== "active") {
         console.log(`  Stop requested for ${convId}`);
-        killProcess(convId);
+        await killProcess(convId);
       } else if (entry?.state === "active") {
-        console.log(`  Stop requested for ${convId} but process is active, skipping`);
+        console.log(`  Stop requested for ${convId} (active, will honor in stream)`);
+        activeStopRequests.add(convId);
       }
       // Clear the flag even if we don't have the process or it's active
       await api(`/conversations/${convId}/process`, {
@@ -283,7 +301,7 @@ async function checkStopRequests() {
   }
 }
 
-function checkIdleTimeouts() {
+async function checkIdleTimeouts() {
   const now = Date.now();
   const toKill: string[] = [];
   for (const [convId, entry] of processPool) {
@@ -294,7 +312,7 @@ function checkIdleTimeouts() {
   }
   for (const convId of toKill) {
     console.log(`  Idle timeout for ${convId}`);
-    killProcess(convId);
+    await killProcess(convId);
   }
 }
 
@@ -383,6 +401,7 @@ async function processMessage(pending: PendingMessage) {
   let sessionCaptured = !!pending.claude_session_id;
   let capturedSessionId = pending.claude_session_id || "";
   let finalChunkSent = false;
+  let stoppedByRequest = false;
 
   // Track current content block for structured streaming
   let currentBlockType: string | null = null;
@@ -395,25 +414,25 @@ async function processMessage(pending: PendingMessage) {
 
     if (poolEntry && poolEntry.state === "warm") {
       // Check model matches
-      if (poolEntry.model === (pending.model || "opus")) {
+      if (poolEntry.model === (pending.model || DEFAULT_MODEL)) {
         // Use the pre-warmed process
         proc = poolEntry.proc;
         poolEntry.state = "active";
         poolEntry.lastUsedAt = Date.now();
         usedWarm = true;
-        reportProcessStatus(pending.conversation_id, "active");
+        await reportProcessStatus(pending.conversation_id, "active");
         console.log("  Using pre-warmed process");
       } else {
         // Model mismatch — kill and cold-start
         console.log("  Model mismatch, killing pre-warmed process");
-        killProcess(pending.conversation_id);
+        await killProcess(pending.conversation_id);
         proc = spawnColdProcess(pending);
       }
     } else {
       // No warm process — cold start
       if (poolEntry) {
         // Entry exists but in wrong state, clean up
-        killProcess(pending.conversation_id);
+        await killProcess(pending.conversation_id);
       }
       proc = spawnColdProcess(pending);
     }
@@ -423,19 +442,23 @@ async function processMessage(pending: PendingMessage) {
       const entry: ProcessEntry = {
         proc,
         sessionId: pending.claude_session_id || "",
-        model: pending.model || "opus",
+        model: pending.model || DEFAULT_MODEL,
         conversationId: pending.conversation_id,
         state: "active",
         lastUsedAt: Date.now(),
         spawnedAt: Date.now(),
       };
       processPool.set(pending.conversation_id, entry);
-      reportProcessStatus(pending.conversation_id, "active");
+      await reportProcessStatus(pending.conversation_id, "active");
     }
 
     // Write prompt and close stdin
-    proc.stdin.write(pending.user_content);
-    proc.stdin.end();
+    try {
+      proc.stdin.write(pending.user_content);
+      proc.stdin.end();
+    } catch (err) {
+      throw new Error(`Failed to write to process stdin: ${err}`);
+    }
     const reader = proc.stdout.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -443,6 +466,14 @@ async function processMessage(pending: PendingMessage) {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+
+      // Honor stop requests for active processes
+      if (activeStopRequests.has(pending.conversation_id)) {
+        activeStopRequests.delete(pending.conversation_id);
+        stoppedByRequest = true;
+        console.log("  Stop request honored, aborting");
+        break;
+      }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -573,18 +604,21 @@ async function processMessage(pending: PendingMessage) {
       }
     }
 
+    // Kill process if we broke out early (stop request)
+    if (stoppedByRequest) {
+      try { proc.kill(); } catch {}
+    }
+
     // Wait for process to exit
     const exitCode = await proc.exited;
 
-    if (!finalChunkSent && fullText) {
+    if (!finalChunkSent) {
       await postChunk(pending.message_id, sequence++, "", true, "text");
       finalChunkSent = true;
     }
 
-    if (!fullText) {
-      const stderrReader = proc.stderr.getReader();
-      const { value: errBytes } = await stderrReader.read();
-      const stderrText = errBytes ? new TextDecoder().decode(errBytes) : "";
+    if (!fullText && !stoppedByRequest) {
+      const stderrText = await new Response(proc.stderr).text();
       await postError(
         pending.message_id,
         stderrText || `Claude exited with code ${exitCode}`
@@ -599,17 +633,17 @@ async function processMessage(pending: PendingMessage) {
     const sessionToWarm = capturedSessionId;
     if (sessionToWarm) {
       try {
-        spawnPreWarmedProcess(
+        await spawnPreWarmedProcess(
           pending.conversation_id,
           sessionToWarm,
-          pending.model || "opus"
+          pending.model || DEFAULT_MODEL
         );
       } catch (err) {
         console.error("  Failed to pre-warm:", err);
-        reportProcessStatus(pending.conversation_id, null);
+        await reportProcessStatus(pending.conversation_id, null);
       }
     } else {
-      reportProcessStatus(pending.conversation_id, null);
+      await reportProcessStatus(pending.conversation_id, null);
     }
   } catch (err) {
     console.error("  Process error:", err);
@@ -619,19 +653,13 @@ async function processMessage(pending: PendingMessage) {
     );
     // Clean up
     processPool.delete(pending.conversation_id);
-    reportProcessStatus(pending.conversation_id, null);
-    try { proc!.kill(); } catch {}
+    await reportProcessStatus(pending.conversation_id, null);
+    if (proc) try { proc.kill(); } catch {}
   }
 }
 
 function spawnColdProcess(pending: PendingMessage): ReturnType<typeof Bun.spawn> {
-  const args = buildClaudeArgs(pending.claude_session_id, pending.model || "opus");
-  return Bun.spawn(["claude", ...args], {
-    cwd: join(import.meta.dir, "../.."),
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  return spawnClaude(pending.claude_session_id, pending.model || DEFAULT_MODEL);
 }
 
 // --- Main ---
@@ -657,8 +685,22 @@ async function main() {
   await fetchSettings();
   console.log(`Pool config: max=${poolMax}, idle_timeout=${idleTimeoutMs / 3600000}h\n`);
 
-  let tickCount = 0;
+  // Graceful shutdown
+  const shutdown = async () => {
+    console.log("\nShutting down...");
+    for (const [convId] of processPool) {
+      await killProcess(convId);
+    }
+    process.exit(0);
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 
+  // Independent maintenance timers
+  setInterval(() => checkStopRequests().catch(() => {}), STOP_CHECK_INTERVAL_MS);
+  setInterval(() => { checkIdleTimeouts().catch(() => {}); fetchSettings().catch(() => {}); }, SETTINGS_REFRESH_INTERVAL_MS);
+
+  // Main poll loop
   while (true) {
     try {
       const pending = await pollForWork();
@@ -667,19 +709,6 @@ async function main() {
       }
     } catch (err) {
       console.error("Poll loop error:", err);
-    }
-
-    tickCount++;
-
-    // Every 10 ticks (10s): check stop requests
-    if (tickCount % 10 === 0) {
-      checkStopRequests().catch(() => {});
-    }
-
-    // Every 60 ticks (60s): check idle timeouts + refresh settings
-    if (tickCount % 60 === 0) {
-      checkIdleTimeouts();
-      fetchSettings().catch(() => {});
     }
 
     await Bun.sleep(POLL_INTERVAL);

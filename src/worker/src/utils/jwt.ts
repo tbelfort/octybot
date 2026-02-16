@@ -43,10 +43,12 @@ export interface JWTPayload {
   exp: number;
 }
 
+const JWT_EXPIRY_DAYS = 30;
+
 export async function signJWT(
   payload: Omit<JWTPayload, "iat" | "exp">,
   secret: string,
-  expiresInDays = 30
+  expiresInDays = JWT_EXPIRY_DAYS
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const fullPayload: JWTPayload = {

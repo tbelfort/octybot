@@ -6,17 +6,10 @@ const app = new Hono<HonoEnv>();
 const MAX_TEXT = 4096;
 
 app.get("/", (c) => {
-  if (!c.env.OPENAI_API_KEY) {
-    return c.json({ error: "OpenAI API key not configured. Add it with: npx wrangler secret put OPENAI_API_KEY" }, 500);
-  }
   return c.json({ ok: true });
 });
 
 app.post("/", async (c) => {
-  if (!c.env.OPENAI_API_KEY) {
-    return c.json({ error: "OpenAI API key not configured. Add it with: npx wrangler secret put OPENAI_API_KEY" }, 500);
-  }
-
   let body: { text?: string };
   try {
     body = await c.req.json();

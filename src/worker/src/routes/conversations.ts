@@ -1,7 +1,14 @@
 import { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
 import type { HonoEnv, ConversationRow, MessageRow } from "../types";
 
 const app = new Hono<HonoEnv>();
+
+async function getConvOrThrow(db: D1Database, id: string): Promise<ConversationRow> {
+  const conv = await db.prepare("SELECT * FROM conversations WHERE id = ?").bind(id).first<ConversationRow>();
+  if (!conv) throw new HTTPException(404, { message: "Conversation not found" });
+  return conv;
+}
 
 // GET /conversations/process/stop-requests — agent checks which conversations need process stopped
 app.get("/process/stop-requests", async (c) => {
@@ -49,14 +56,7 @@ app.post("/", async (c) => {
 // GET /conversations/:id — get with messages
 app.get("/:id", async (c) => {
   const id = c.req.param("id");
-
-  const conv = await c.env.DB.prepare(
-    "SELECT * FROM conversations WHERE id = ?"
-  )
-    .bind(id)
-    .first<ConversationRow>();
-
-  if (!conv) return c.json({ error: "Conversation not found" }, 404);
+  const conv = await getConvOrThrow(c.env.DB, id);
 
   const { results: messages } = await c.env.DB.prepare(
     "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC"
@@ -70,29 +70,13 @@ app.get("/:id", async (c) => {
 // DELETE /conversations/:id — delete conversation + messages + chunks
 app.delete("/:id", async (c) => {
   const id = c.req.param("id");
+  await getConvOrThrow(c.env.DB, id);
 
-  const conv = await c.env.DB.prepare(
-    "SELECT id FROM conversations WHERE id = ?"
-  )
-    .bind(id)
-    .first();
-
-  if (!conv) return c.json({ error: "Conversation not found" }, 404);
-
-  // Delete chunks for all messages in conversation
-  await c.env.DB.prepare(
-    "DELETE FROM chunks WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?)"
-  )
-    .bind(id)
-    .run();
-
-  await c.env.DB.prepare("DELETE FROM messages WHERE conversation_id = ?")
-    .bind(id)
-    .run();
-
-  await c.env.DB.prepare("DELETE FROM conversations WHERE id = ?")
-    .bind(id)
-    .run();
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM chunks WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?)").bind(id),
+    c.env.DB.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(id),
+    c.env.DB.prepare("DELETE FROM conversations WHERE id = ?").bind(id),
+  ]);
 
   return c.json({ deleted: true });
 });
@@ -105,13 +89,7 @@ app.patch("/:id", async (c) => {
 
   if (!title) return c.json({ error: "title is required" }, 400);
 
-  const conv = await c.env.DB.prepare(
-    "SELECT id FROM conversations WHERE id = ?"
-  )
-    .bind(id)
-    .first();
-
-  if (!conv) return c.json({ error: "Conversation not found" }, 404);
+  await getConvOrThrow(c.env.DB, id);
 
   const now = new Date().toISOString();
   await c.env.DB.prepare(
@@ -153,14 +131,7 @@ app.post("/:id/process/stop", async (c) => {
 // POST /conversations/:id/messages — send user message
 app.post("/:id/messages", async (c) => {
   const convId = c.req.param("id");
-
-  const conv = await c.env.DB.prepare(
-    "SELECT id FROM conversations WHERE id = ?"
-  )
-    .bind(convId)
-    .first();
-
-  if (!conv) return c.json({ error: "Conversation not found" }, 404);
+  await getConvOrThrow(c.env.DB, convId);
 
   const body = await c.req.json<{ content: string }>();
   if (!body.content?.trim()) {
@@ -171,26 +142,17 @@ app.post("/:id/messages", async (c) => {
   const userMsgId = crypto.randomUUID();
   const assistantMsgId = crypto.randomUUID();
 
-  // Create user message (done)
-  await c.env.DB.prepare(
-    "INSERT INTO messages (id, conversation_id, role, content, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  )
-    .bind(userMsgId, convId, "user", body.content.trim(), "done", now, now)
-    .run();
-
-  // Create pending assistant message
-  await c.env.DB.prepare(
-    "INSERT INTO messages (id, conversation_id, role, content, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  )
-    .bind(assistantMsgId, convId, "assistant", "", "pending", now, now)
-    .run();
-
-  // Update conversation timestamp
-  await c.env.DB.prepare(
-    "UPDATE conversations SET updated_at = ? WHERE id = ?"
-  )
-    .bind(now, convId)
-    .run();
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      "INSERT INTO messages (id, conversation_id, role, content, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).bind(userMsgId, convId, "user", body.content.trim(), "done", now, now),
+    c.env.DB.prepare(
+      "INSERT INTO messages (id, conversation_id, role, content, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).bind(assistantMsgId, convId, "assistant", "", "pending", now, now),
+    c.env.DB.prepare(
+      "UPDATE conversations SET updated_at = ? WHERE id = ?"
+    ).bind(now, convId),
+  ]);
 
   return c.json(
     {

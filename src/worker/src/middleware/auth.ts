@@ -2,6 +2,8 @@ import { createMiddleware } from "hono/factory";
 import type { HonoEnv } from "../types";
 import { verifyJWT, signJWT } from "../utils/jwt";
 
+const REFRESH_THRESHOLD_SECONDS = 7 * 86400;
+
 export const jwtAuth = createMiddleware<HonoEnv>(
   async (c, next) => {
     // Extract token from Authorization header or query param
@@ -30,9 +32,8 @@ export const jwtAuth = createMiddleware<HonoEnv>(
     await next();
 
     // Auto-refresh: if token expires within 7 days, issue a new one
-    const sevenDays = 7 * 86400;
     const now = Math.floor(Date.now() / 1000);
-    if (payload.exp - now < sevenDays) {
+    if (payload.exp - now < REFRESH_THRESHOLD_SECONDS) {
       const newToken = await signJWT(
         { sub: payload.sub, type: payload.type },
         c.env.JWT_SECRET

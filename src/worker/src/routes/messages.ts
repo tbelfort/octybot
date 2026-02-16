@@ -4,6 +4,9 @@ import type { HonoEnv, MessageRow, ChunkRow, ConversationRow } from "../types";
 
 const app = new Hono<HonoEnv>();
 
+const SSE_TIMEOUT_MS = 60_000;
+const SSE_POLL_INTERVAL_MS = 300;
+
 // GET /messages/pending — agent polls for work
 app.get("/pending", async (c) => {
   // Find oldest pending assistant message
@@ -131,9 +134,7 @@ app.get("/:id/stream", async (c) => {
   return streamSSE(c, async (stream) => {
     let lastSeq = -1;
     const startTime = Date.now();
-    const TIMEOUT = 60_000;
-
-    while (Date.now() - startTime < TIMEOUT) {
+    while (Date.now() - startTime < SSE_TIMEOUT_MS) {
       const { results: chunks } = await c.env.DB.prepare(
         "SELECT sequence, text, type, is_final FROM chunks WHERE message_id = ? AND sequence > ? ORDER BY sequence ASC"
       )
@@ -175,7 +176,7 @@ app.get("/:id/stream", async (c) => {
         return;
       }
 
-      await stream.sleep(300);
+      await stream.sleep(SSE_POLL_INTERVAL_MS);
     }
 
     // Timeout

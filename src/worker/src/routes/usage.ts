@@ -3,6 +3,8 @@ import type { HonoEnv } from "../types";
 
 const app = new Hono<HonoEnv>();
 
+const MAX_BATCH_ENTRIES = 50;
+
 // POST / — batch log usage entries (from memory hooks)
 app.post("/", async (c) => {
   let body: { entries?: Array<{ category: string; input_units?: number; output_units?: number; cost_usd: number }> };
@@ -17,8 +19,8 @@ app.post("/", async (c) => {
     return c.json({ error: "Missing entries array" }, 400);
   }
 
-  if (entries.length > 50) {
-    return c.json({ error: "Too many entries (max 50)" }, 400);
+  if (entries.length > MAX_BATCH_ENTRIES) {
+    return c.json({ error: `Too many entries (max ${MAX_BATCH_ENTRIES})` }, 400);
   }
 
   const now = new Date().toISOString();

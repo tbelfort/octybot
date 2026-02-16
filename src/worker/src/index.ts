@@ -28,6 +28,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { HonoEnv } from "./types";
 import { jwtAuth } from "./middleware/auth";
+import { requireOpenAIKey } from "./middleware/openai";
 import deviceRoutes from "./routes/devices";
 import conversationRoutes from "./routes/conversations";
 import messageRoutes from "./routes/messages";
@@ -45,7 +46,7 @@ app.use(
     origin: (origin) => {
       if (!origin) return "*";
       if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) return origin;
-      if (/\.pages\.dev$/.test(origin)) return origin;
+      if (/^https:\/\/(octybot-pwa\.pages\.dev|[a-f0-9]+\.octybot-pwa\.pages\.dev)$/.test(origin)) return origin;
       return "";
     },
     exposeHeaders: ["X-Refresh-Token"],
@@ -61,8 +62,8 @@ app.route("/devices", deviceRoutes);
 // JWT auth for all protected routes
 app.use("/conversations/*", jwtAuth);
 app.use("/messages/*", jwtAuth);
-app.use("/transcribe", jwtAuth);
-app.use("/tts", jwtAuth);
+app.use("/transcribe", jwtAuth, requireOpenAIKey);
+app.use("/tts", jwtAuth, requireOpenAIKey);
 app.use("/usage/*", jwtAuth);
 app.use("/usage", jwtAuth);
 app.use("/settings/*", jwtAuth);

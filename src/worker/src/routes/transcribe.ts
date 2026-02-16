@@ -6,10 +6,6 @@ const app = new Hono<HonoEnv>();
 const MAX_SIZE = 5 * 1024 * 1024; // 5MB
 
 app.post("/", async (c) => {
-  if (!c.env.OPENAI_API_KEY) {
-    return c.json({ error: "OpenAI API key not configured. Add it with: npx wrangler secret put OPENAI_API_KEY" }, 500);
-  }
-
   const contentLength = parseInt(c.req.header("content-length") || "0", 10);
   if (contentLength > MAX_SIZE) {
     return c.json({ error: "Audio too large (max 5MB)" }, 413);
@@ -48,7 +44,7 @@ app.post("/", async (c) => {
 
   const text = (await resp.text()).trim();
 
-  // Log cost: gpt-4o-mini-transcribe ~$0.60/M input tokens, estimate from audio size
+  // Log cost: gpt-4o-transcribe ~$0.60/M input tokens, estimate from audio size
   // Rough estimate: 1 second of audio ≈ 50 tokens, 1MB webm ≈ 60s
   const estimatedSeconds = audioBuffer.byteLength / 16000; // rough bytes-to-seconds
   const estimatedTokens = estimatedSeconds * 50;

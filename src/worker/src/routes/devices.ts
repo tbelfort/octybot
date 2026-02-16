@@ -4,6 +4,8 @@ import { generatePairingCode, signJWT } from "../utils/jwt";
 
 const app = new Hono<HonoEnv>();
 
+const PAIRING_EXPIRY_MS = 15 * 60 * 1000;
+
 // POST /devices/register — agent registers, gets pairing code
 app.post("/register", async (c) => {
   const body = await c.req
@@ -13,7 +15,7 @@ app.post("/register", async (c) => {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const code = generatePairingCode();
-  const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 min
+  const expiresAt = new Date(Date.now() + PAIRING_EXPIRY_MS).toISOString();
 
   await c.env.DB.prepare(
     "INSERT INTO devices (id, device_type, device_name, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)"

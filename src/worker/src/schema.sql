@@ -3,6 +3,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     claude_session_id TEXT,
     model TEXT NOT NULL DEFAULT 'opus',
     title TEXT DEFAULT 'New Chat',
+    process_status TEXT,
+    process_stop_requested INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -23,6 +25,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     message_id TEXT NOT NULL,
     sequence INTEGER NOT NULL,
     text TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'text',
     is_final INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     FOREIGN KEY (message_id) REFERENCES messages(id)

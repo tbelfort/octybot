@@ -1,5 +1,7 @@
 // ---- Config ----
 const WORKER_URL = "https://octybot-worker.tom-adf.workers.dev";
+const TTS_BATCH_SIZE = 5;
+const TITLE_MAX_LENGTH = 30;
 let TOKEN = localStorage.getItem("token") || "";
 
 // ---- State ----
@@ -128,6 +130,7 @@ function kickToSetup() {
   handsfreeActive = false;
   handsfreeOverlay.classList.add("hidden");
   ttsBtn.classList.remove("active");
+  cancelRecording();
   openaiKeyOk = null;
   pendingMicAccess = false;
   if (handsfreeSilentNode) {
@@ -139,14 +142,6 @@ function kickToSetup() {
     handsfreeAudioCtx = null;
   }
   handsfreeSourceNode = null;
-  if (mediaRecorder && mediaRecorder.state === "recording") {
-    clearTimeout(recordingTimeout);
-    mediaRecorder.ondataavailable = null;
-    mediaRecorder.onstop = null;
-    mediaRecorder = null;
-    audioChunks = [];
-    voiceBtn.classList.remove("recording");
-  }
   // Kill the global mic stream (globalMicStream cleanup covers all tracks)
   if (globalMicStream) {
     globalMicStream.getTracks().forEach((t) => t.stop());
@@ -180,6 +175,19 @@ async function api(path, options = {}) {
   }
   if (resp.status === 204) return null;
   return resp.json();
+}
+
+async function rawFetch(path, options = {}) {
+  const resp = await fetch(`${WORKER_URL}${path}`, {
+    ...options,
+    headers: { Authorization: `Bearer ${TOKEN}`, ...options.headers },
+  });
+  handleAuthHeaders(resp);
+  if (resp.status === 401 || resp.status === 403) {
+    kickToSetup();
+    return null;
+  }
+  return resp;
 }
 
 // ---- Setup ----
@@ -304,19 +312,54 @@ settingsSaveBtn.addEventListener("click", async () => {
   }
 });
 
+// ---- Shared Helpers ----
+function setPlayBtnState(btn, state) {
+  if (!btn) return;
+  btn.classList.remove("playing", "loading", "paused");
+  if (state === "play") btn.textContent = "\u25B6";
+  else if (state === "stop") { btn.textContent = "\u25A0"; btn.classList.add("playing"); }
+  else if (state === "loading") { btn.textContent = "\u00B7\u00B7\u00B7"; btn.classList.add("loading"); }
+  else if (state === "paused") { btn.textContent = "\u25B6"; btn.classList.add("paused"); }
+}
+
+function cancelRecording() {
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    clearTimeout(recordingTimeout);
+    mediaRecorder.ondataavailable = null;
+    mediaRecorder.onstop = null;
+    mediaRecorder = null;
+    audioChunks = [];
+    voiceBtn.classList.remove("recording");
+  }
+}
+
+function cancelActiveWork() {
+  stopAudio();
+  if (activeEventSource) {
+    activeEventSource.close();
+    activeEventSource = null;
+  }
+  if (isStreaming) resetStreamingState();
+}
+
 // ---- Conversations ----
 async function loadConversations() {
-  const data = await api("/conversations");
-  if (data) {
-    // Track process status from conversation data
-    convProcessStatus = {};
-    for (const conv of data.conversations) {
-      if (conv.process_status) {
-        convProcessStatus[conv.id] = conv.process_status;
+  try {
+    const data = await api("/conversations");
+    if (data) {
+      // Track process status from conversation data
+      convProcessStatus = {};
+      for (const conv of data.conversations) {
+        if (conv.process_status) {
+          convProcessStatus[conv.id] = conv.process_status;
+        }
       }
+      renderConvList(data.conversations);
+      updateSessionBadge(currentConvId);
     }
-    renderConvList(data.conversations);
-    updateSessionBadge(currentConvId);
+  } catch (err) {
+    console.error("Failed to load conversations:", err);
+    showToast("Failed to load conversations");
   }
 }
 
@@ -347,49 +390,14 @@ function renderConvList(convs) {
 }
 
 function startSidebarRename(el, conv) {
-  if (el.querySelector(".rename-input")) return;
   const titleSpan = el.querySelector(".title");
-  const actions = el.querySelector(".conv-actions");
-  const oldTitle = conv.title;
-
-  const input = document.createElement("input");
-  input.className = "rename-input";
-  input.type = "text";
-  input.value = oldTitle;
-
-  titleSpan.style.display = "none";
-  actions.style.display = "none";
-  el.insertBefore(input, titleSpan);
-  input.focus();
-  input.select();
-
-  let done = false;
-  function finish(save) {
-    if (done) return;
-    done = true;
-    const newTitle = input.value.trim();
-    input.remove();
-    titleSpan.style.display = "";
-    actions.style.display = "";
-    if (save && newTitle && newTitle !== oldTitle) {
-      renameConversation(conv.id, newTitle);
-    }
-  }
-
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); finish(true); }
-    if (e.key === "Escape") { finish(false); }
+  inlineRename(el, titleSpan, conv.title, (newTitle) => {
+    renameConversation(conv.id, newTitle);
   });
-  input.addEventListener("blur", () => finish(true));
 }
 
 async function openConversation(id, title) {
-  stopAudio();
-  if (activeEventSource) {
-    activeEventSource.close();
-    activeEventSource = null;
-  }
-  if (isStreaming) resetStreamingState();
+  cancelActiveWork();
   currentConvId = id;
   convTitle.textContent = title || "New Chat";
   closeSidebar();
@@ -403,12 +411,7 @@ let isCreatingConv = false;
 async function createConversation() {
   if (isCreatingConv) return null;
   isCreatingConv = true;
-  stopAudio();
-  if (activeEventSource) {
-    activeEventSource.close();
-    activeEventSource = null;
-  }
-  if (isStreaming) resetStreamingState();
+  cancelActiveWork();
   const prevConvId = currentConvId;
   try {
     const data = await api("/conversations", {
@@ -434,25 +437,25 @@ async function createConversation() {
 }
 
 async function deleteConversation(id) {
-  // Stop any warm/active process before deleting
-  if (convProcessStatus[id]) {
-    await api(`/conversations/${id}/process/stop`, { method: "POST" }).catch(() => {});
-    delete convProcessStatus[id];
-  }
-  await api(`/conversations/${id}`, { method: "DELETE" });
-  if (currentConvId === id) {
-    stopAudio();
-    if (activeEventSource) {
-      activeEventSource.close();
-      activeEventSource = null;
+  try {
+    // Stop any warm/active process before deleting
+    if (convProcessStatus[id]) {
+      await api(`/conversations/${id}/process/stop`, { method: "POST" }).catch(() => {});
+      delete convProcessStatus[id];
     }
-    if (isStreaming) resetStreamingState();
-    currentConvId = null;
-    convTitle.textContent = "New Chat";
-    renderMessages([]);
-    updateSessionBadge(null);
+    await api(`/conversations/${id}`, { method: "DELETE" });
+    if (currentConvId === id) {
+      cancelActiveWork();
+      currentConvId = null;
+      convTitle.textContent = "New Chat";
+      renderMessages([]);
+      updateSessionBadge(null);
+    }
+    loadConversations();
+  } catch (err) {
+    console.error("Failed to delete conversation:", err);
+    showToast("Failed to delete conversation");
   }
-  loadConversations();
 }
 
 async function renameConversation(id, newTitle) {
@@ -535,16 +538,7 @@ async function sendMessage() {
   isSending = true;
 
   stopAudio();
-
-  // Stop any active recording (never kill tracks — stream is reused globally)
-  if (mediaRecorder && mediaRecorder.state === "recording") {
-    clearTimeout(recordingTimeout);
-    mediaRecorder.ondataavailable = null;
-    mediaRecorder.onstop = null;
-    mediaRecorder = null;
-    audioChunks = [];
-    voiceBtn.classList.remove("recording");
-  }
+  cancelRecording();
 
   // Clear input immediately
   msgInput.value = "";
@@ -578,7 +572,7 @@ async function sendMessage() {
 
     // Update title from first message
     if (convTitle.textContent === "New Chat") {
-      const shortTitle = text.length > 30 ? text.slice(0, 30) + "..." : text;
+      const shortTitle = text.length > TITLE_MAX_LENGTH ? text.slice(0, TITLE_MAX_LENGTH) + "..." : text;
       convTitle.textContent = shortTitle;
     }
 
@@ -601,14 +595,16 @@ function streamResponse(messageId) {
 
   const url = `${WORKER_URL}/messages/${messageId}/stream?token=${encodeURIComponent(TOKEN)}`;
   const es = new EventSource(url);
-  es.onerror = () => es.close();
   activeEventSource = es;
 
   let currentToolBlock = null;
+  let lastSeq = -1;
 
   es.addEventListener("chunk", (e) => {
     let data;
     try { data = JSON.parse(e.data); } catch { return; }
+    if (data.sequence <= lastSeq) return; // skip duplicate on reconnect
+    lastSeq = data.sequence;
     const chunkType = data.type || "text";
 
     if (chunkType === "text") {
@@ -671,6 +667,10 @@ function streamResponse(messageId) {
   });
 
   es.addEventListener("error", (e) => {
+    // EventSource.CONNECTING (0) = transient error, auto-reconnecting — let it retry.
+    // EventSource.CLOSED (2) = permanent failure — clean up.
+    if (es.readyState === EventSource.CONNECTING) return;
+
     endStream();
     if (handsfreeActive) setHandsfreeState("green");
     if (!fullText) {
@@ -823,22 +823,15 @@ async function transcribeAndSend(audioBlob, mimeType) {
   msgInput.placeholder = "Transcribing...";
 
   try {
-    const resp = await fetch(`${WORKER_URL}/transcribe`, {
+    const resp = await rawFetch("/transcribe", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${TOKEN}`,
-        "Content-Type": mimeType || "audio/webm",
-      },
+      headers: { "Content-Type": mimeType || "audio/webm" },
       body: audioBlob,
     });
 
-    handleAuthHeaders(resp);
+    if (!resp) return; // kicked to setup
 
     if (!resp.ok) {
-      if (resp.status === 401 || resp.status === 403) {
-        kickToSetup();
-        return;
-      }
       const err = await resp.json().catch(() => ({}));
       throw new Error(err.error || `Transcription failed (${resp.status})`);
     }
@@ -1059,40 +1052,24 @@ function stopAudio() {
     currentAudio.onerror = null;
     currentAudio = null;
   }
-  if (currentPlayBtn) {
-    currentPlayBtn.textContent = "\u25B6";
-    currentPlayBtn.classList.remove("playing", "loading", "paused");
-    currentPlayBtn = null;
-  }
+  setPlayBtnState(currentPlayBtn, "play");
+  currentPlayBtn = null;
 }
 
 function pauseAudio() {
   if (currentAudio) {
     currentAudio.pause();
   }
-  if (currentPlayBtn) {
-    currentPlayBtn.textContent = "\u25B6";
-    currentPlayBtn.classList.remove("playing");
-    currentPlayBtn.classList.add("paused");
-  }
+  setPlayBtnState(currentPlayBtn, "paused");
 }
 
 function resumeAudio() {
   if (currentAudio) {
     currentAudio.play().catch(() => {
-      // Revert to paused state if resume fails
-      if (currentPlayBtn) {
-        currentPlayBtn.textContent = "\u25B6";
-        currentPlayBtn.classList.remove("playing");
-        currentPlayBtn.classList.add("paused");
-      }
+      setPlayBtnState(currentPlayBtn, "paused");
     });
   }
-  if (currentPlayBtn) {
-    currentPlayBtn.textContent = "\u25A0";
-    currentPlayBtn.classList.remove("paused");
-    currentPlayBtn.classList.add("playing");
-  }
+  setPlayBtnState(currentPlayBtn, "stop");
 }
 
 function createPlayBtn(text) {
@@ -1145,23 +1122,16 @@ function splitSentences(text) {
 }
 
 async function fetchTtsBlob(text, signal) {
-  const resp = await fetch(`${WORKER_URL}/tts`, {
+  const resp = await rawFetch("/tts", {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${TOKEN}`,
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
     signal,
   });
 
-  handleAuthHeaders(resp);
+  if (!resp) throw new Error("auth"); // kicked to setup
 
   if (!resp.ok) {
-    if (resp.status === 401 || resp.status === 403) {
-      kickToSetup();
-      throw new Error("auth");
-    }
     const err = await resp.json().catch(() => ({}));
     throw new Error(err.error || "TTS failed");
   }
@@ -1176,8 +1146,7 @@ async function speak(text, playBtn) {
   if (sentences.length === 0) return;
 
   if (playBtn) {
-    playBtn.textContent = "\u00B7\u00B7\u00B7";
-    playBtn.classList.add("loading");
+    setPlayBtnState(playBtn, "loading");
     currentPlayBtn = playBtn;
   }
 
@@ -1208,11 +1177,7 @@ async function speak(text, playBtn) {
       const blob = ttsQueue.shift();
       playing = true;
 
-      if (playBtn) {
-        playBtn.textContent = "\u25A0";
-        playBtn.classList.remove("loading");
-        playBtn.classList.add("playing");
-      }
+      setPlayBtnState(playBtn, "stop");
       if (handsfreeActive) setHandsfreeState("purple");
 
       // Check dynamically each sentence: WebAudio if handsfree, else <audio>
@@ -1283,17 +1248,12 @@ async function speak(text, playBtn) {
   function finishPlayback() {
     playing = false;
     if (currentPlayBtn === playBtn) {
-      if (playBtn) {
-        playBtn.textContent = "\u25B6";
-        playBtn.classList.remove("playing", "loading", "paused");
-      }
+      setPlayBtnState(playBtn, "play");
       currentPlayBtn = null;
       currentAudio = null;
     }
     if (handsfreeActive) {
       setHandsfreeState("green");
-    } else if (voiceChatMode && !isStreaming) {
-      startRecording();
     }
   }
 
@@ -1310,7 +1270,7 @@ async function speak(text, playBtn) {
     // This ensures the queue has multiple items ready, so when onended fires
     // the next blob is immediately available.
     const cacheBlobs = [];
-    const firstBatch = sentences.slice(0, Math.min(5, sentences.length));
+    const firstBatch = sentences.slice(0, Math.min(TTS_BATCH_SIZE, sentences.length));
     const firstBlobs = await Promise.all(
       firstBatch.map((s) => fetchTtsBlob(s, abort.signal).catch((e) => {
         if (e.message === "auth") throw e;
@@ -1338,7 +1298,7 @@ async function speak(text, playBtn) {
 
     // Prefetch remaining sentences in batches of 5
     while (sentenceIdx < sentences.length && !abort.signal.aborted) {
-      const batch = sentences.slice(sentenceIdx, sentenceIdx + 5);
+      const batch = sentences.slice(sentenceIdx, sentenceIdx + TTS_BATCH_SIZE);
       const promises = batch.map((s) => fetchTtsBlob(s, abort.signal).catch(() => null));
       const blobs = await Promise.all(promises);
       sentenceIdx += batch.length;
@@ -1372,18 +1332,19 @@ async function speak(text, playBtn) {
   }
 }
 
-// ---- Header Title Rename ----
-convTitle.addEventListener("click", () => {
-  if (!currentConvId || convTitle.textContent === "New Chat") return;
+// ---- Inline Rename Helper ----
+function inlineRename(containerEl, hideEl, currentTitle, onSave, inputClass = "rename-input") {
+  if (containerEl.querySelector(".rename-input") || containerEl.querySelector(".title-input")) return;
 
-  const oldTitle = convTitle.textContent;
   const input = document.createElement("input");
-  input.className = "title-input";
+  input.className = inputClass;
   input.type = "text";
-  input.value = oldTitle;
+  input.value = currentTitle;
 
-  convTitle.style.display = "none";
-  convTitle.parentNode.insertBefore(input, convTitle.nextSibling);
+  hideEl.style.display = "none";
+  const hideActions = containerEl.querySelector(".conv-actions");
+  if (hideActions) hideActions.style.display = "none";
+  containerEl.insertBefore(input, hideEl.nextSibling || hideEl);
   input.focus();
   input.select();
 
@@ -1393,9 +1354,10 @@ convTitle.addEventListener("click", () => {
     done = true;
     const newTitle = input.value.trim();
     input.remove();
-    convTitle.style.display = "";
-    if (save && newTitle && newTitle !== oldTitle) {
-      renameConversation(currentConvId, newTitle);
+    hideEl.style.display = "";
+    if (hideActions) hideActions.style.display = "";
+    if (save && newTitle && newTitle !== currentTitle) {
+      onSave(newTitle);
     }
   }
 
@@ -1404,6 +1366,14 @@ convTitle.addEventListener("click", () => {
     if (e.key === "Escape") { finish(false); }
   });
   input.addEventListener("blur", () => finish(true));
+}
+
+// ---- Header Title Rename ----
+convTitle.addEventListener("click", () => {
+  if (!currentConvId || convTitle.textContent === "New Chat") return;
+  inlineRename(convTitle.parentNode, convTitle, convTitle.textContent, (newTitle) => {
+    renameConversation(currentConvId, newTitle);
+  }, "title-input");
 });
 
 // ---- Sidebar ----

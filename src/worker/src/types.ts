@@ -44,6 +44,7 @@ export interface ChunkRow {
   message_id: string;
   sequence: number;
   text: string;
+  type: string;
   is_final: number;
   created_at: string;
 }
