@@ -19,7 +19,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
-const WORKER_URL = "https://octybot-worker.tom-adf.workers.dev";
+const WORKER_URL = "https://octybot-worker.YOUR-SUBDOMAIN.workers.dev";
 const POLL_INTERVAL = 1000;
 const PAIR_POLL_INTERVAL = 2000;
 const STOP_CHECK_INTERVAL_MS = 10_000;
