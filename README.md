@@ -1,14 +1,71 @@
 # Octybot
 
-A personal AI agent that runs on your computer and talks to your phone. No apps to install, no third-party messaging services, no subscriptions beyond what you already have.
+A personal AI agent system that runs on your computer and talks to your phone. No apps to install, no third-party messaging services, no subscriptions beyond what you already have.
 
 **The idea is simple:** Why do you need WhatsApp, Telegram, or a phone plan to talk to an AI? All you actually need is a free Cloudflare Worker as a relay and a persistent process on your computer. Your phone opens a web page, your computer runs Claude — done.
 
 ```
-Your Phone (PWA) <---> Cloudflare Worker (free) <---> Your Computer <---> Claude Code
+Your Phone (PWA) <---> Cloudflare Worker (free) <---> Your Computer <---> Agents
 ```
 
-Octybot wraps Claude Code with a mobile chat interface, real-time streaming, voice input/output, pre-warmed sessions for instant responses, and an optional long-term memory system that lets Claude remember things across conversations.
+Octybot wraps Claude Code with a mobile chat interface, real-time streaming, voice input/output, pre-warmed sessions for instant responses, and a long-term memory system that lets agents remember things across conversations.
+
+## Core Concepts
+
+### Projects
+
+A **project** is the top-level container. It's a folder at `~/.octybot/projects/<name>/` that holds everything — agents, their memory, and their configuration.
+
+```
+~/.octybot/projects/
+  work/                  # a project
+  personal/              # another project
+  side-hustle/           # another project
+```
+
+Projects are fully isolated. Switching projects switches everything — agents, memory, tools.
+
+### Agents
+
+Projects contain **agents**. There is one type of agent. Every agent is a Claude Code instance with:
+
+- **1 memory store** — its own knowledge graph
+- **0 or more tools** — Python scripts it can use
+- **0 or more connections** — other agents it can talk to
+
+Every project starts with a **Main Agent** — the one you chat with from your phone. It can be renamed. Beyond that, you create as many agents as you need.
+
+An agent that has an Airtable tool and knows about Airtable is an "Airtable agent." An agent that has no tools but knows about your team is a "personal agent." They're the same thing — just configured differently.
+
+### How Agents Talk to Each Other
+
+Any agent can be taught to talk to any other agent. When you connect two agents, the calling agent gets one thing: how to send a message. Nothing else. It doesn't know what tools the other agent has, what it remembers, or how it works. It just sends a natural language request and gets a response back.
+
+```
+Main Agent: "Get all Q1 budget entries from the Projects table"
+    ↓ (message queue)
+Airtable Agent: [uses tool, queries API, returns results]
+    ↓ (message queue)
+Main Agent: "Here's what I found in your Q1 budget..."
+```
+
+### Memory
+
+Every agent has its own **memory** — a local SQLite graph database with vector search. People, facts, events, preferences, and instructions are stored as nodes with relationships between them. Memory is retrieved and stored automatically via Claude Code hooks — the agent never sees the machinery, it just knows things.
+
+For a detailed technical explanation, see [How Memory Works](docs/memory.md).
+
+### Tools
+
+Tools are Python scripts in `~/.octybot/tools/`. Each tool is a single `.py` file that does one thing — query an API, run a script, transform data. An agent can have zero tools or many.
+
+```
+~/.octybot/tools/
+  airtable.py            # Airtable API wrapper
+  github.py              # GitHub operations
+  slack.py               # Slack messaging
+  calendar.py            # Google Calendar
+```
 
 ## What You Need
 
@@ -90,9 +147,17 @@ cd src/worker && npm install && cd ../..
 bun install
 ```
 
-#### 3. Deploy (twice)
+#### 3. Install globally
 
-The first deploy creates your Worker URL. The second deploy bakes that URL into the app.
+Run the global installer — it copies files to `~/.octybot/` and prompts for your Worker URL and database ID:
+
+```bash
+bun memory/install-global.ts
+```
+
+For the first run, enter your database ID (from step 2) and leave the Worker URL blank — you'll get it after deploying.
+
+#### 4. Deploy
 
 ```bash
 bun deploy.ts
@@ -100,18 +165,15 @@ bun deploy.ts
 
 Note your Worker URL from the output: `https://octybot-worker.YOUR-SUBDOMAIN.workers.dev`
 
-Update it in both files:
-
-- `src/pwa/app.js` — line 2
-- `src/agent/index.ts` — line 22
-
-Then deploy again:
+Then re-run the installer to patch the URL into the installed copies, and deploy again:
 
 ```bash
-bun deploy.ts
+bun memory/install-global.ts    # enter your Worker URL when prompted
+bun deploy.ts                   # redeploys PWA with correct URL
+bun bin/setup-project.ts default
 ```
 
-#### 4. Start the agent
+#### 5. Start the agent
 
 ```bash
 bun src/agent/service.ts install
@@ -119,7 +181,7 @@ bun src/agent/service.ts install
 
 A pairing code appears (like `WOLF-3847`). The service starts automatically on login, restarts on crash, and prevents your computer from sleeping.
 
-#### 5. Pair your phone
+#### 6. Pair your phone
 
 Open `https://octybot-pwa.pages.dev` in your phone's browser. Enter the pairing code. Start chatting.
 
@@ -128,6 +190,70 @@ Open `https://octybot-pwa.pages.dev` in your phone's browser. Enter the pairing 
 ### After setup
 
 Add the PWA to your home screen for a native app feel (Safari > Share > Add to Home Screen).
+
+## Architecture
+
+```
+~/.octybot/
+  config.json                        # worker URL, active project
+  bin/                               # agent runner, service, deploy, setup
+  core/                              # shared core (memory engine, message bus, agent runtime)
+  tools/                             # Python tool scripts (.py files)
+  data/<project>/<agent>/            # per-agent data (memory.db, debug, snapshots)
+  projects/<name>/                   # project dirs
+    agents.json                      #   agent registry (names, connections, skills)
+    agents/
+      main/                          #   Main Agent working dir
+        CLAUDE.md                    #     agent instructions
+        .claude/settings.json        #     hooks config
+      airtable/                      #   Airtable agent
+      github/                        #   GitHub agent
+```
+
+| Component | Source | Installed to | Runs on |
+|-----------|--------|-------------|---------|
+| Memory System | `memory/` | `~/.octybot/memory/` | Your computer — retrieval, storage, embeddings |
+| Core | `core/` | `~/.octybot/core/` | Your computer — memory engine, message bus, agent runtime |
+| Agent Runner | `src/agent/` | `~/.octybot/bin/` | Your computer — polls for messages, spawns Claude Code |
+| Worker | `src/worker/` | Cloudflare Workers (free) | Message relay, auth, D1 database, SSE streaming |
+| PWA | `src/pwa/` | Cloudflare Pages (free) | Mobile chat UI, voice, settings |
+| Deploy | `deploy.ts` | `~/.octybot/bin/` | Deploys everything in one command |
+
+### How a Message Flows
+
+1. You type on your phone (PWA)
+2. PWA sends the message to the Cloudflare Worker via HTTPS
+3. Worker stores it in D1, returns a conversation ID
+4. Agent runner (polling on your computer) picks up the pending message
+5. Agent runner spawns Claude Code with the message
+6. **Before Claude sees the message**, the `UserPromptSubmit` hook fires — the memory system retrieves relevant context and injects it into Claude's system prompt via `<memory>` tags
+7. Claude responds, streaming chunks back through the Worker to your phone via SSE
+8. **After Claude responds**, the `Stop` hook fires — the memory system extracts and stores any new information from the exchange
+
+Claude never calls the memory system. It doesn't know it exists. It just finds relevant context already in its prompt, and the information it learns gets captured after the fact.
+
+### Inter-Agent Communication
+
+Agents communicate via a local SQLite message bus. When Agent A wants to ask Agent B something:
+
+1. Agent A calls a skill (e.g., "ask airtable agent")
+2. The skill writes a message to the bus
+3. Agent B picks up the message, processes it, writes a response
+4. Agent A receives the response and continues
+
+No external dependencies, no Redis, no network. Messages are rows in a SQLite table with sender, receiver, payload, and status.
+
+### Setting Up Agent Connections
+
+```bash
+# Create an agent with a tool
+octybot agent create airtable --tool airtable.py
+
+# Connect it to the main agent
+octybot agent connect main airtable --skill "Ask Airtable"
+```
+
+This gives the Main Agent a skill that says: *"To interact with Airtable, send a message to the Airtable Agent. Describe what you need in plain English. You'll receive the results back."* That's it. No API docs, no tool schemas. Just talk to the agent.
 
 ## How It Stays Alive
 
@@ -160,22 +286,16 @@ bun src/agent/index.ts
 **Pre-warmed sessions** — After each response, the agent spawns the next Claude process so it's loaded and waiting. The next message gets zero startup latency.
 
 **Session management** — The phone app shows active sessions (green dot), lets you kill them, and configure limits:
-- Session timeout: 1–168 hours (default 24)
-- Max concurrent sessions: 1–10 (default 3)
+- Session timeout: 1-168 hours (default 24)
+- Max concurrent sessions: 1-10 (default 3)
 
 **Voice mode** — Hold-to-talk voice input with transcription, and text-to-speech responses.
 
-**Long-term memory** — Claude normally forgets everything between conversations. Octybot gives it permanent memory — people, facts, events, preferences, instructions — stored in a local graph database with vector search. It remembers what you told it last week the same way a person would. See [Memory](#long-term-memory) below.
+**Multi-project support** — Run multiple independent projects, each with their own agents, memory, and configuration. Switch between them from the phone app.
 
-## Architecture
+**Long-term memory** — Agents have permanent memory — people, facts, events, preferences, instructions — stored in a local graph database with vector search. They remember what you told them last week the same way a person would. See [How Memory Works](docs/memory.md) for the full technical breakdown.
 
-| Component | Directory | Runs on |
-|-----------|-----------|---------|
-| Agent | `src/agent/` | Your computer — polls for messages, runs Claude, manages process pool |
-| Worker | `src/worker/` | Cloudflare Workers (free) — message queue, auth, SSE streaming |
-| PWA | `src/pwa/` | Cloudflare Pages (free) — chat UI, sessions, settings |
-| Memory | `memory/` | Your computer — permanent memory graph (SQLite + vector search) |
-| Deploy | `deploy.ts` | Deploys everything in one command |
+**Inter-agent delegation** — Agents delegate tasks to specialized agents. The Main Agent doesn't need to know how Airtable works — it just asks the Airtable Agent.
 
 ## Deploying Updates
 
@@ -187,19 +307,13 @@ bun deploy.ts pwa           # PWA only
 bun deploy.ts agent         # reinstall agent service
 ```
 
-## Long-Term Memory
+After updating source code, re-run the global installer to sync `~/.octybot/`:
 
-Without memory, every Claude conversation starts from zero. Octybot changes that. It gives Claude near-human permanent memory — the kind where you mention your sister's name once and it just knows it from then on.
+```bash
+bun memory/install-global.ts
+```
 
-Under the hood, it's a graph database with vector search running locally on your machine. Entities (people, places, projects), facts, events, preferences, and instructions are stored as nodes with relationships between them. Every time you talk to Claude, a two-stage pipeline automatically retrieves what's relevant and stores what's new. You never interact with it directly — it just works.
-
-The retrieval pipeline uses an agentic search loop: a reasoning layer classifies your query, plans a search strategy, and an LLM-driven tool loop searches entities, facts, events, and instructions until it has enough context. Three deterministic safety nets ensure nothing critical gets missed. A curation layer then filters the results down to only what matters for this specific conversation.
-
-The storage pipeline runs in parallel: it classifies what's new in your conversation, searches for existing related memories, and either creates new nodes or supersedes old ones. If you correct a fact ("actually my sister's name is Sarah, not Sara"), it updates automatically.
-
-The result: Claude builds a persistent, evolving understanding of your world across every conversation. It knows your team, your projects, your preferences, your rules — without you ever having to repeat yourself.
-
-### Setting up memory
+## Setting Up Memory
 
 You need API keys from two services (both have free tiers):
 
@@ -213,10 +327,11 @@ OPENROUTER_API_KEY=sk-or-v1-your-key-here
 VOYAGE_API_KEY=pa-your-key-here
 ```
 
-Install:
+Install globally and create a project:
 
 ```bash
-bun memory/install.ts .
+bun memory/install-global.ts
+bun bin/setup-project.ts default
 ```
 
 ### Memory commands
@@ -231,17 +346,7 @@ Inside Claude Code:
 /octybot-memory trace
 ```
 
-From the phone app chat:
-
-```
-/octybot memory status
-/octybot memory on | off
-/octybot memory backup
-/octybot memory freeze <name>
-/octybot memory restore <name>
-/octybot memory list
-/octybot memory clear --confirm
-```
+Memory can also be managed from the phone app's **Settings > Memory** section (toggle on/off, backup, freeze, restore, snapshots, clear).
 
 ## Docker Demo Environment
 
@@ -263,13 +368,13 @@ Named volumes persist Cloudflare and Claude auth between sessions. `docker compo
 |---------|---------|------|
 | Cloudflare Workers + D1 + Pages | Worker, database, PWA hosting | Free |
 | Claude Code | AI responses | [Anthropic pricing](https://www.anthropic.com/pricing) |
-| OpenAI (optional) | Voice transcription + TTS | ~$50–100/mo with heavy voice usage |
-| OpenRouter (memory only) | Memory classification LLM (OSS-120B) | A few $/mo with heavy usage |
+| OpenAI (optional) | Voice transcription + TTS | ~$50-100/mo with heavy voice usage |
+| OpenRouter (memory only) | Memory classification + retrieval LLM | A few $/mo with heavy usage |
 | Voyage AI (memory only) | Vector embeddings | Free (200M tokens, $5 deposit to activate) |
 
-**Memory** requires two API keys: [OpenRouter](https://openrouter.ai) and [Voyage AI](https://voyageai.com). OpenRouter runs OSS-120B for memory classification — with heavy usage expect a few dollars a month. Voyage AI provides vector embeddings and is effectively free (200M tokens), but you need to deposit $5 to activate your account.
+**Memory** uses two external services, both cheap. OpenRouter runs GPT-OSS-120B (an open-source model) for all memory LLM calls — classification, search planning, storage filtering, curation. A typical message costs fractions of a cent; heavy daily usage runs a few dollars a month. Voyage AI provides vector embeddings for semantic search and is effectively free (200M tokens included), though you need to deposit $5 to activate your account.
 
-**Voice chat** requires an [OpenAI](https://platform.openai.com/api-keys) API key for transcription and text-to-speech. Transcription is cheap, but TTS adds up — heavy voice usage will run $50–100/month. Text-only chat doesn't need this key at all.
+**Voice chat** requires an [OpenAI](https://platform.openai.com/api-keys) API key for transcription and text-to-speech. Transcription is cheap, but TTS adds up — heavy voice usage will run $50-100/month. Text-only chat doesn't need this key at all.
 
 ## Troubleshooting
 
@@ -281,3 +386,5 @@ Named volumes persist Cloudflare and Claude auth between sessions. `docker compo
 | Worker errors | Check logs in [Cloudflare dashboard](https://dash.cloudflare.com) > Workers > octybot-worker > Logs |
 | Memory not working | Check `.env` exists with valid keys, run `/octybot-memory active` |
 | Wrangler auth expired | Re-run `npx wrangler login` (tokens expire after ~1hr) |
+| Wrong project | Check `~/.octybot/config.json` for active_project |
+| Global install stale | Re-run `bun memory/install-global.ts` to sync latest code |
