@@ -6,3 +6,6 @@ memory/hooks/
 *.db
 *.db-shm
 *.db-wal
+src/pwa/dist/
+.wrangler/
+.playwright-mcp/

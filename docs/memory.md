@@ -91,7 +91,7 @@ When a message comes in, the `UserPromptSubmit` hook decides what context to ret
 
 ### Path 1: Full Pipeline (first message or new conversation)
 
-This is the main pipeline. It runs when there's no recent conversation state — either it's the first message, or more than 5 minutes have passed since the last one.
+This is the main pipeline. It runs when there's no conversation state — either it's the very first message, or the Claude Code session ID changed (indicating a new conversation).
 
 ```
 User message
@@ -147,7 +147,7 @@ Output: curated context string → injected as <memory> tags
 
 ### Path 2: Follow-up Pipeline (within a conversation)
 
-When you're in an active conversation (previous turns exist within the last 5 minutes), a lighter pipeline runs instead.
+When previous turns exist in the conversation state (up to 5 are kept), a lighter pipeline runs instead.
 
 Claude Code already has the full conversation in its context window, including `<memory>` tags from previous turns. The follow-up pipeline's job isn't pronoun resolution or context tracking — Claude handles that fine on its own. Its job is deciding **whether the memory system needs to be queried again at all**.
 
@@ -173,7 +173,7 @@ The conversation state is a lightweight shadow of what Claude already knows — 
 
 **When the follow-up pipeline returns null** (it can't figure out what to do), it falls back to the full pipeline.
 
-**Staleness:** If the session ID changes or more than 5 minutes pass between messages, the conversation state resets and Path 1 runs.
+**New conversation detection:** The conversation state resets (and Path 1 runs) only when the Claude Code session ID changes — meaning a genuinely new conversation started. There is no time-based cutoff. If you send a message hours after the last one but within the same session, the memory system still has the last 5 turns of context.
 
 ## Storage Pipeline
 
@@ -299,6 +299,12 @@ Scope drives two behaviors:
 | Conversation | Claude (via Claude Code) | Actual user-facing responses | Claude Code subscription |
 
 A typical message that triggers both retrieval and storage costs about $0.003–0.006 total in OpenRouter + Voyage API calls. The LLM calls are the main cost; embeddings are effectively free.
+
+## Debug Traces
+
+When debug mode is enabled (`/octybot dev-mode`), the memory system writes detailed pipeline traces to `~/.octybot/data/<project>/<agent>/debug/`. Each trace is a JSON file containing the full pipeline execution: user prompt, L1 classification, search plan, all tool calls and results, and the final curated context.
+
+**Privacy note:** Debug traces contain the full text of user prompts and all retrieved memory context. This may include personally identifiable information (PII), sensitive facts, or private details stored in the memory graph. Traces are written to the local filesystem only and are never transmitted externally, but be aware of this if sharing debug files or if the device is accessible to others.
 
 ## File Structure
 

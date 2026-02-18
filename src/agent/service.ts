@@ -16,16 +16,22 @@
 import { existsSync, mkdirSync, writeFileSync, unlinkSync, readFileSync, renameSync, statSync } from "fs";
 import { homedir } from "os";
 import { join, resolve } from "path";
+import { run } from "../shared/shell";
+import { OCTYBOT_HOME } from "../memory/config";
 
 // ── Constants ──────────────────────────────────────────────────────────
 
 const SERVICE_LABEL = "com.octybot.agent";
-const OCTYBOT_DIR = join(homedir(), ".octybot");
-const LOG_DIR = join(OCTYBOT_DIR, "logs");
+const LOG_DIR = join(OCTYBOT_HOME, "logs");
 const LOG_FILE = join(LOG_DIR, "agent.log");
-const DEVICE_FILE = join(OCTYBOT_DIR, "device.json");
-const PROJECT_ROOT = resolve(import.meta.dir, "../..");
-const AGENT_ENTRY = resolve(import.meta.dir, "index.ts");
+const DEVICE_FILE = join(OCTYBOT_HOME, "device.json");
+
+// Support both global install (~/.octybot/bin/agent.ts) and source repo
+const GLOBAL_AGENT = join(OCTYBOT_HOME, "bin", "agent.ts");
+const LOCAL_AGENT = resolve(import.meta.dir, "index.ts");
+const AGENT_ENTRY = existsSync(GLOBAL_AGENT) ? GLOBAL_AGENT : LOCAL_AGENT;
+const PROJECT_ROOT = existsSync(GLOBAL_AGENT) ? OCTYBOT_HOME : resolve(import.meta.dir, "../..");
+
 const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10 MB
 const PAIRING_TIMEOUT = 120_000; // 2 minutes
 
@@ -37,16 +43,6 @@ function ok(msg: string) {
 
 function fail(msg: string) {
   console.error(`  \u2717 ${msg}`);
-}
-
-async function run(cmd: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  const exitCode = await proc.exited;
-  return { exitCode, stdout: stdout.trim(), stderr: stderr.trim() };
 }
 
 async function which(name: string): Promise<string | null> {
@@ -214,7 +210,7 @@ async function checkPrereqs(): Promise<{ bunPath: string; claudePath: string } |
 
   // Check writable config dir
   try {
-    mkdirSync(OCTYBOT_DIR, { recursive: true });
+    mkdirSync(OCTYBOT_HOME, { recursive: true });
     ok_count++;
   } catch {
     fail(`Cannot create ${OCTYBOT_DIR}`);

@@ -28,29 +28,42 @@ app.post("/process/clear-all", async (c) => {
   return c.json({ cleared: true });
 });
 
-// GET /conversations — list all
+// GET /conversations — list all (optionally filtered by project)
 app.get("/", async (c) => {
-  const { results } = await c.env.DB.prepare(
-    "SELECT * FROM conversations ORDER BY updated_at DESC"
-  ).all<ConversationRow>();
+  const project = c.req.query("project");
+  let results: ConversationRow[];
 
-  return c.json({ conversations: results ?? [] });
+  if (project) {
+    const resp = await c.env.DB.prepare(
+      "SELECT * FROM conversations WHERE project_name = ? ORDER BY updated_at DESC"
+    ).bind(project).all<ConversationRow>();
+    results = resp.results ?? [];
+  } else {
+    const resp = await c.env.DB.prepare(
+      "SELECT * FROM conversations ORDER BY updated_at DESC"
+    ).all<ConversationRow>();
+    results = resp.results ?? [];
+  }
+
+  return c.json({ conversations: results });
 });
 
 // POST /conversations — create new
 app.post("/", async (c) => {
-  const body = await c.req.json<{ title?: string }>().catch(() => ({ title: undefined }));
+  const body = await c.req.json<{ title?: string; project_name?: string; agent_name?: string }>().catch(() => ({ title: undefined, project_name: undefined, agent_name: undefined }));
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const title = body.title || "New Chat";
+  const projectName = body.project_name || "default";
+  const agentName = body.agent_name || "default";
 
   await c.env.DB.prepare(
-    "INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)"
+    "INSERT INTO conversations (id, title, project_name, agent_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
   )
-    .bind(id, title, now, now)
+    .bind(id, title, projectName, agentName, now, now)
     .run();
 
-  return c.json({ id, title, created_at: now }, 201);
+  return c.json({ id, title, project_name: projectName, agent_name: agentName, created_at: now }, 201);
 });
 
 // GET /conversations/:id — get with messages

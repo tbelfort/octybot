@@ -8,20 +8,22 @@
  *   bun setup.ts
  */
 
-import { resolve } from "path";
+import { resolve, join } from "path";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { createInterface } from "readline";
+import { homedir } from "os";
 
 const ROOT = resolve(import.meta.dir);
+const OCTYBOT_HOME = process.env.OCTYBOT_HOME || join(homedir(), ".octybot");
 const WORKER_DIR = resolve(ROOT, "src/worker");
-const PWA_DIR = resolve(ROOT, "src/pwa");
-const WRANGLER_TOML = resolve(WORKER_DIR, "wrangler.toml");
-const APP_JS = resolve(ROOT, "src/pwa/app.js");
-const AGENT_INDEX = resolve(ROOT, "src/agent/index.ts");
 const AGENT_SERVICE = resolve(ROOT, "src/agent/service.ts");
+const GLOBAL_CONFIG = join(OCTYBOT_HOME, "config.json");
 
 const D1_DATABASE = "octybot-db";
 const PAGES_PROJECT = "octybot-pwa";
+
+// Module-level state — set by step 4, consumed by step 7
+let resolvedDbId: string | undefined;
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -107,10 +109,6 @@ function promptYN(question: string, defaultYes: boolean): Promise<boolean> {
     if (!answer) return defaultYes;
     return answer.toLowerCase().startsWith("y");
   });
-}
-
-function readToml(): string {
-  return readFileSync(WRANGLER_TOML, "utf-8");
 }
 
 // ── Step 1: Prerequisites ────────────────────────────────────────────
@@ -211,12 +209,18 @@ async function installDependencies(): Promise<boolean> {
 async function createD1Database(): Promise<boolean> {
   console.log("\nStep 4: D1 database...");
 
-  const toml = readToml();
-  const currentId = toml.match(/database_id\s*=\s*"([^"]+)"/)?.[1];
-
-  if (currentId && currentId !== "REPLACE_ME") {
-    skip(`D1 database configured (${currentId.slice(0, 8)}...)`);
-    return true;
+  // Check installed wrangler.toml first (from a previous run)
+  const installedToml = join(OCTYBOT_HOME, "worker", "wrangler.toml");
+  if (existsSync(installedToml)) {
+    try {
+      const toml = readFileSync(installedToml, "utf-8");
+      const match = toml.match(/database_id\s*=\s*"([^"]+)"/);
+      if (match?.[1] && match[1] !== "REPLACE_ME") {
+        resolvedDbId = match[1];
+        skip(`D1 database configured (${resolvedDbId.slice(0, 8)}...)`);
+        return true;
+      }
+    } catch {}
   }
 
   const result = await runCapture([
@@ -245,12 +249,8 @@ async function createD1Database(): Promise<boolean> {
           const dbs = JSON.parse(listResult.stdout);
           const db = dbs.find((d: { name: string }) => d.name === D1_DATABASE);
           if (db?.uuid) {
-            const newToml = toml.replace(
-              /database_id\s*=\s*"[^"]*"/,
-              `database_id = "${db.uuid}"`
-            );
-            writeFileSync(WRANGLER_TOML, newToml);
-            ok(`D1 database ID set: ${db.uuid.slice(0, 8)}...`);
+            resolvedDbId = db.uuid;
+            ok(`D1 database ID: ${resolvedDbId.slice(0, 8)}...`);
             return true;
           }
         } catch {}
@@ -258,17 +258,12 @@ async function createD1Database(): Promise<boolean> {
     }
 
     fail("Could not parse database_id from wrangler output");
-    console.error("Run `npx wrangler d1 create octybot-db` manually and paste the UUID into src/worker/wrangler.toml");
+    console.error("Run `npx wrangler d1 create octybot-db` manually and note the UUID.");
     return false;
   }
 
-  const dbId = idMatch[1];
-  const newToml = toml.replace(
-    /database_id\s*=\s*"[^"]*"/,
-    `database_id = "${dbId}"`
-  );
-  writeFileSync(WRANGLER_TOML, newToml);
-  ok(`D1 database created: ${dbId.slice(0, 8)}...`);
+  resolvedDbId = idMatch[1];
+  ok(`D1 database created: ${resolvedDbId.slice(0, 8)}...`);
   return true;
 }
 
@@ -360,65 +355,51 @@ async function createPagesProject(): Promise<boolean> {
   return false;
 }
 
-// ── Step 7: Deploy + URL Patching ────────────────────────────────────
+// ── Step 7: Deploy ───────────────────────────────────────────────────
+//
+// Flow: install-global (copies source → ~/.octybot/, patches db_id)
+//     → migrations → deploy worker → extract URL
+//     → patch config.json + pwa/app.js with URL → deploy PWA
 
 async function deployAndPatch(): Promise<boolean> {
   console.log("\nStep 7: Deploying...");
 
-  const appJs = readFileSync(APP_JS, "utf-8");
-  const needsUrlPatch = appJs.includes("YOUR-SUBDOMAIN");
+  const installedWorkerDir = join(OCTYBOT_HOME, "worker");
+  const installedPwaDir = join(OCTYBOT_HOME, "pwa");
 
-  if (!needsUrlPatch) {
-    // URL already set — do a normal deploy
-    info("Worker URL already configured — running standard deploy...");
-
-    // Run migrations
-    const migrateResult = await runCapture(
-      ["npx", "wrangler", "d1", "migrations", "apply", D1_DATABASE, "--remote"],
-      { cwd: WORKER_DIR }
-    );
-    if (!migrateResult.ok) {
-      fail("D1 migrations failed");
-      console.error(migrateResult.stderr || migrateResult.stdout);
-      return false;
-    }
-    ok("D1 migrations applied");
-
-    // Deploy worker
-    const workerResult = await runCapture(
-      ["npx", "wrangler", "deploy"],
-      { cwd: WORKER_DIR }
-    );
-    if (!workerResult.ok) {
-      fail("Worker deploy failed");
-      console.error(workerResult.stderr || workerResult.stdout);
-      return false;
-    }
-    ok("Worker deployed");
-
-    // Deploy PWA
-    const pwaResult = await runCapture([
-      "npx", "wrangler", "pages", "deploy", ".",
-      "--project-name", PAGES_PROJECT,
-      "--branch", "main",
-      "--commit-dirty=true",
-    ], { cwd: PWA_DIR });
-    if (!pwaResult.ok) {
-      fail("PWA deploy failed");
-      console.error(pwaResult.stderr || pwaResult.stdout);
-      return false;
-    }
-    ok("PWA deployed");
-
-    return true;
+  // Check if URL is already configured (re-run case)
+  let existingWorkerUrl: string | undefined;
+  if (existsSync(GLOBAL_CONFIG)) {
+    try {
+      const config = JSON.parse(readFileSync(GLOBAL_CONFIG, "utf-8"));
+      if (config.worker_url && !config.worker_url.includes("YOUR-SUBDOMAIN")) {
+        existingWorkerUrl = config.worker_url;
+      }
+    } catch {}
   }
 
-  // First deploy: get Worker URL, then patch files, then redeploy
+  // Run install-global to copy source → ~/.octybot/ and patch database_id
+  const installArgs = ["bun", resolve(ROOT, "src/memory/install-global.ts"), "--non-interactive"];
+  if (resolvedDbId) {
+    installArgs.push("--database-id", resolvedDbId);
+  }
+  if (existingWorkerUrl) {
+    installArgs.push("--worker-url", existingWorkerUrl);
+  }
 
-  // Run migrations first
+  info("Running global installer...");
+  const installResult = await runCapture(installArgs);
+  if (!installResult.ok) {
+    fail("Global install failed");
+    console.error(installResult.stderr || installResult.stdout);
+    return false;
+  }
+  ok("Global install complete");
+
+  // Run migrations from installed worker dir
   const migrateResult = await runCapture(
     ["npx", "wrangler", "d1", "migrations", "apply", D1_DATABASE, "--remote"],
-    { cwd: WORKER_DIR }
+    { cwd: installedWorkerDir }
   );
   if (!migrateResult.ok) {
     fail("D1 migrations failed");
@@ -427,11 +408,11 @@ async function deployAndPatch(): Promise<boolean> {
   }
   ok("D1 migrations applied");
 
-  // Deploy worker to get URL
-  info("First deploy (to discover Worker URL)...");
+  // Deploy worker from installed dir
+  info(existingWorkerUrl ? "Deploying worker..." : "First deploy (to discover Worker URL)...");
   const deployResult = await runCapture(
     ["npx", "wrangler", "deploy"],
-    { cwd: WORKER_DIR }
+    { cwd: installedWorkerDir }
   );
   if (!deployResult.ok) {
     fail("Worker deploy failed");
@@ -440,56 +421,54 @@ async function deployAndPatch(): Promise<boolean> {
   }
   ok("Worker deployed");
 
-  // Extract Worker URL from output
-  const combined = deployResult.stdout + deployResult.stderr;
-  const urlMatch = combined.match(
-    /https:\/\/octybot-worker\.[a-z0-9-]+\.workers\.dev/i
-  );
+  // Resolve worker URL
+  let workerUrl = existingWorkerUrl;
+  if (!workerUrl) {
+    // Extract Worker URL from deploy output
+    const combined = deployResult.stdout + deployResult.stderr;
+    const urlMatch = combined.match(
+      /https:\/\/octybot-worker\.[a-z0-9-]+\.workers\.dev/i
+    );
 
-  if (!urlMatch) {
-    fail("Could not extract Worker URL from deploy output");
-    console.error("  Output was:");
-    console.error(`  ${combined.trim().split("\n").join("\n  ")}`);
-    console.log("\n  Find your Worker URL in the Cloudflare dashboard and update manually:");
-    console.log("    src/pwa/app.js line 2");
-    console.log("    src/agent/index.ts line 22");
-    return false;
+    if (!urlMatch) {
+      fail("Could not extract Worker URL from deploy output");
+      console.error("  Output was:");
+      console.error(`  ${combined.trim().split("\n").join("\n  ")}`);
+      console.log("\n  Find your Worker URL in the Cloudflare dashboard");
+      console.log("  and re-run: bun src/memory/install-global.ts");
+      return false;
+    }
+
+    workerUrl = urlMatch[0];
+    ok(`Worker URL: ${workerUrl}`);
+
+    // Patch config.json and pwa/app.js with the discovered URL
+    // (install-global didn't have it on the first run)
+    const installPatchArgs = [
+      "bun", resolve(ROOT, "src/memory/install-global.ts"),
+      "--non-interactive", "--worker-url", workerUrl,
+    ];
+    if (resolvedDbId) {
+      installPatchArgs.push("--database-id", resolvedDbId);
+    }
+    await runCapture(installPatchArgs);
+    ok("Patched installed copies with Worker URL");
   }
 
-  const workerUrl = urlMatch[0];
-  ok(`Worker URL: ${workerUrl}`);
-
-  // Patch app.js
-  const patchedAppJs = appJs.replace(
-    /const WORKER_URL = "https:\/\/octybot-worker\.YOUR-SUBDOMAIN\.workers\.dev"/,
-    `const WORKER_URL = "${workerUrl}"`
-  );
-  writeFileSync(APP_JS, patchedAppJs);
-  ok("Patched src/pwa/app.js");
-
-  // Patch agent/index.ts
-  const agentTs = readFileSync(AGENT_INDEX, "utf-8");
-  const patchedAgentTs = agentTs.replace(
-    /const WORKER_URL = "https:\/\/octybot-worker\.YOUR-SUBDOMAIN\.workers\.dev"/,
-    `const WORKER_URL = "${workerUrl}"`
-  );
-  writeFileSync(AGENT_INDEX, patchedAgentTs);
-  ok("Patched src/agent/index.ts");
-
-  // Second deploy: PWA with correct URL
-  info("Second deploy (PWA with correct Worker URL)...");
+  // Deploy PWA from installed dir (has real Worker URL)
+  info("Deploying PWA...");
   const pwaResult = await runCapture([
     "npx", "wrangler", "pages", "deploy", ".",
     "--project-name", PAGES_PROJECT,
     "--branch", "main",
     "--commit-dirty=true",
-  ], { cwd: PWA_DIR });
+  ], { cwd: installedPwaDir });
   if (!pwaResult.ok) {
     fail("PWA deploy failed");
     console.error(pwaResult.stderr || pwaResult.stdout);
     return false;
   }
-  ok("PWA deployed with correct Worker URL");
+  ok("PWA deployed");
 
   return true;
 }
@@ -571,16 +550,51 @@ async function setupMemory(): Promise<boolean> {
     ok(".env file written");
   }
 
-  info("Running memory installer...\n");
-  const success = await runInteractive(["bun", "memory/install.ts", "."]);
-  if (!success) {
-    fail("Memory installation failed");
-    info("You can try manually: bun memory/install.ts .");
+  // Run global installer
+  info("Running global installer...\n");
+  const globalInstallOk = await runInteractive(["bun", "src/memory/install-global.ts"]);
+  if (!globalInstallOk) {
+    fail("Global installation failed");
+    info("You can try manually: bun src/memory/install-global.ts");
   } else {
-    ok("Memory system installed");
+    ok("Global install complete");
+  }
+
+  // Create default project
+  info("Creating default project...\n");
+  const setupProjectPath = resolve(ROOT, "src/cli/setup-project.ts");
+  const projectOk = await runInteractive(["bun", setupProjectPath, "default"]);
+  if (!projectOk) {
+    fail("Default project setup failed");
+    info("You can try manually: bun src/cli/setup-project.ts default");
+  } else {
+    ok("Default project created");
   }
 
   return true;
+}
+
+// ── Recovery Guide ───────────────────────────────────────────────────
+
+function printRecoveryGuide(completedSteps: string[]) {
+  console.log("\n" + "=".repeat(50));
+  console.log("Setup failed. Here's what was completed:\n");
+  for (const step of completedSteps) {
+    console.log(`  \u2713 ${step}`);
+  }
+  console.log("\nTo recover:");
+  console.log("  1. Fix the issue described above");
+  console.log("  2. Re-run: bun setup.ts");
+  console.log("     (Completed steps will be skipped automatically)\n");
+
+  if (completedSteps.includes("d1-database") && !completedSteps.includes("deploy")) {
+    console.log("If you need to clean up Cloudflare resources:");
+    console.log(`  npx wrangler d1 delete ${D1_DATABASE}`);
+    if (completedSteps.includes("pages-project")) {
+      console.log(`  npx wrangler pages project delete ${PAGES_PROJECT}`);
+    }
+    console.log();
+  }
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -589,37 +603,51 @@ console.log("Octybot Setup\n");
 console.log("This script sets up everything from a fresh clone.");
 console.log("It's safe to re-run — completed steps are skipped.\n");
 
+// Track completed steps for rollback guidance on failure
+const completedSteps: string[] = [];
+
 let success = true;
 
 success = await checkPrerequisites();
 if (!success) process.exit(1);
+completedSteps.push("prerequisites");
 
 success = await ensureWranglerAuth();
 if (!success) process.exit(1);
+completedSteps.push("wrangler-auth");
 
 success = await installDependencies();
 if (!success) process.exit(1);
+completedSteps.push("dependencies");
 
 success = await createD1Database();
-if (!success) process.exit(1);
+if (!success) { printRecoveryGuide(completedSteps); process.exit(1); }
+completedSteps.push("d1-database");
 
 success = await setWorkerSecrets();
-if (!success) process.exit(1);
+if (!success) { printRecoveryGuide(completedSteps); process.exit(1); }
+completedSteps.push("worker-secrets");
 
 success = await createPagesProject();
-if (!success) process.exit(1);
+if (!success) { printRecoveryGuide(completedSteps); process.exit(1); }
+completedSteps.push("pages-project");
 
 success = await deployAndPatch();
-if (!success) process.exit(1);
+if (!success) { printRecoveryGuide(completedSteps); process.exit(1); }
+completedSteps.push("deploy");
 
 await installAgent();
 await setupMemory();
 
 // ── Summary ──────────────────────────────────────────────────────────
 
-const appJsFinal = readFileSync(APP_JS, "utf-8");
-const workerUrlMatch = appJsFinal.match(/const WORKER_URL = "([^"]+)"/);
-const workerUrl = workerUrlMatch?.[1] ?? "(unknown)";
+let workerUrl = "(unknown)";
+if (existsSync(GLOBAL_CONFIG)) {
+  try {
+    const config = JSON.parse(readFileSync(GLOBAL_CONFIG, "utf-8"));
+    if (config.worker_url) workerUrl = config.worker_url;
+  } catch {}
+}
 
 console.log("\n" + "=".repeat(50));
 console.log("Setup complete!\n");

@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "OCTYBOT_PROJECT={{PROJECT}} OCTYBOT_AGENT={{AGENT}} bun {{OCTYBOT_HOME}}/memory/hooks/on-prompt.ts" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "OCTYBOT_PROJECT={{PROJECT}} OCTYBOT_AGENT={{AGENT}} bun {{OCTYBOT_HOME}}/memory/hooks/on-stop.ts" }
+        ]
+      }
+    ]
+  }
+}
