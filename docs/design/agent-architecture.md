@@ -143,21 +143,24 @@ CREATE INDEX idx_messages_conversation ON messages(conversation_id);
 
 ### Skill Generation
 
-When you connect Agent A to Agent B, the system auto-generates a Claude Code slash command:
+When you connect Agent A to Agent B with `octybot agent connect A B`, the system creates a Claude Code skill:
 
-```bash
-# ~/.octybot/projects/<project>/agents/main/.claude/commands/ask-airtable.md
-Send a message to the Airtable Agent and wait for a response.
-
-Usage: /ask-airtable <your request in plain English>
-
-The Airtable Agent has access to Airtable and knows how to query, create,
-and update records. Just describe what you need.
-
-[IMPLEMENTATION: calls bus.send("airtable", message) and bus.waitForResponse()]
+```
+<A's working dir>/.claude/skills/ask-airtable/SKILL.md
 ```
 
-Alternatively, this could be a hook-based approach where the skill writes to a known file path and a watcher picks it up.
+```yaml
+---
+description: "Airtable operations — queries, creates, and updates records"
+user-invocable: false
+allowed-tools: Bash(bun *)
+---
+
+Delegate a task to the **airtable** agent by running:
+bun ~/.octybot/delegation/delegate.ts airtable "<your request>"
+```
+
+The skill has `user-invocable: false` so Claude uses it autonomously — no user command needed. Claude sees the description in its context and invokes the skill when the user's question matches.
 
 ### Spawning Agents
 

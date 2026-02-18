@@ -6,29 +6,50 @@
  *   octybot init                              # First-time setup
  *   octybot install                           # Install/update ~/.octybot/
  *   octybot update                            # Same as install (non-interactive)
- *   octybot project list                      # List projects
- *   octybot project create <name> [--dir p]   # Create project
- *   octybot project switch <name>             # Switch active project
- *   octybot agent list                        # List agents in current project
- *   octybot agent add <name> <desc>           # Add agent
- *   octybot agent remove <name>               # Remove agent
+ *   octybot agent create <name> [--dir p]     # Create agent
+ *   octybot agent list                        # List agents
+ *   octybot agent switch <name>               # Switch active agent
+ *   octybot agent delete <name>               # Delete agent
  *   octybot agent connect <a> <b>             # Connect two agents
  *   octybot agent disconnect <a> <b>          # Disconnect two agents
+ *   octybot agent memory <name> [on|off]      # Toggle agent memory
+ *   octybot config backup-dir [<path>]        # Get/set backup directory
+ *   octybot tools install <path>              # Install a tool
+ *   octybot tools list                        # List installed tools
+ *   octybot tools add <tool> [agent]          # Add tool to agent
+ *   octybot tools remove <tool> [agent]       # Remove tool from agent
+ *   octybot tools info <tool>                 # Show tool details
  *   octybot status                            # Show system status
  *   octybot deploy [target]                   # Deploy (worker/pwa/all)
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync } from "fs";
 import { join, resolve } from "path";
+import { homedir } from "os";
 import { run } from "../shared/shell";
-import { OCTYBOT_HOME, getActiveProject, readConfigField, setConfigField } from "../memory/config";
+import { OCTYBOT_HOME, getActiveProject, readConfigField } from "../memory/config";
+import {
+  createAgent,
+  listAgents,
+  deleteAgent,
+  getAgentDir,
+  getAgentWorkingDir,
+} from "./lib/projects";
+import {
+  connectAgents,
+  disconnectAgents,
+} from "./lib/agents";
+import { getBackupDir, setBackupDir } from "./lib/backup";
+import {
+  installTool,
+  addToolToAgent,
+  removeToolFromAgent,
+  listTools,
+  getToolInfo,
+} from "./lib/tools";
 
 /** Package root — works in both git checkout and npm global install. */
 const PKG_ROOT = resolve(import.meta.dir, "../..");
-
-function getProjectDir(name?: string): string {
-  return join(OCTYBOT_HOME, "projects", name || getActiveProject());
-}
 
 // ── Commands ──
 
@@ -57,182 +78,209 @@ async function cmdInstall() {
 }
 
 async function cmdUpdate() {
-  // Same as install — install-global.ts is already idempotent and preserves config
   await cmdInstall();
-}
-
-function cmdProjectList() {
-  const projectsDir = join(OCTYBOT_HOME, "projects");
-  if (!existsSync(projectsDir)) {
-    console.log("No projects found.");
-    return;
-  }
-  const active = getActiveProject();
-  const projects = readdirSync(projectsDir, { withFileTypes: true })
-    .filter(d => d.isDirectory())
-    .map(d => d.name);
-
-  if (projects.length === 0) {
-    console.log("No projects found.");
-    return;
-  }
-
-  for (const name of projects) {
-    const marker = name === active ? " (active)" : "";
-    console.log(`  ${name}${marker}`);
-  }
-}
-
-async function cmdProjectCreate(name: string, extraArgs: string[]) {
-  const setupProjectPath = join(PKG_ROOT, "src", "cli", "setup-project.ts");
-  const args = ["bun", setupProjectPath, name, ...extraArgs];
-  const result = await run(args, { cwd: PKG_ROOT });
-  process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
-}
-
-function cmdProjectSwitch(name: string) {
-  const projectDir = getProjectDir(name);
-  if (!existsSync(projectDir)) {
-    console.error(`Project "${name}" does not exist. Create it with: octybot project create ${name}`);
-    process.exit(1);
-  }
-  setConfigField("active_project", name);
-  console.log(`Switched to project: ${name}`);
 }
 
 // ── Agent commands ──
 
-interface AgentsFile {
-  agents: Record<string, { description: string; connections: string[] }>;
-}
-
-function readAgentsJson(projectDir: string): AgentsFile {
-  const path = join(projectDir, "agents.json");
-  if (!existsSync(path)) {
-    return { agents: { main: { description: "Primary agent", connections: [] } } };
-  }
-  return JSON.parse(readFileSync(path, "utf-8"));
-}
-
-function writeAgentsJson(projectDir: string, data: AgentsFile) {
-  writeFileSync(join(projectDir, "agents.json"), JSON.stringify(data, null, 2) + "\n");
-}
-
 function cmdAgentList() {
-  const projectDir = getProjectDir();
-  const data = readAgentsJson(projectDir);
-  const agents = Object.entries(data.agents);
-
+  const agents = listAgents();
   if (agents.length === 0) {
-    console.log("No agents configured.");
+    console.log("No agents found. Create one with: octybot agent create <name>");
     return;
   }
 
-  console.log(`Agents in project "${getActiveProject()}":`);
-  for (const [name, config] of agents) {
-    const conns = config.connections.length > 0
-      ? ` -> ${config.connections.join(", ")}`
-      : "";
-    console.log(`  ${name}: ${config.description}${conns}`);
+  agents.sort((a, b) => a.name.localeCompare(b.name));
+
+  console.log("");
+  for (const a of agents) {
+    const desc = a.description === "Primary agent" ? "" : a.description;
+    console.log(`  ${a.name}${desc ? ` — ${desc}` : ""}`);
+
+    const dir = getAgentWorkingDir(a.name);
+    const shortDir = dir.replace(homedir(), "~");
+    console.log(`    folder:  ${shortDir}`);
+
+    if (a.connections.length > 0) {
+      console.log(`    talks to: ${a.connections.join(", ")}`);
+    }
+    if (a.tools.length > 0) {
+      console.log(`    tools:   ${a.tools.join(", ")}`);
+    }
+    console.log("");
   }
+
+  console.log(`  ${agents.length} agent${agents.length === 1 ? "" : "s"}`);
+  console.log("");
 }
 
-function cmdAgentAdd(name: string, description: string) {
-  const projectDir = getProjectDir();
-  const data = readAgentsJson(projectDir);
-
-  if (data.agents[name]) {
-    console.error(`Agent "${name}" already exists.`);
-    process.exit(1);
+async function cmdAgentCreate(name: string, extraArgs: string[]) {
+  const dirIdx = extraArgs.indexOf("--dir");
+  let dir: string | undefined;
+  if (dirIdx !== -1) {
+    dir = extraArgs[dirIdx + 1];
   }
-
-  data.agents[name] = { description, connections: [] };
-  writeAgentsJson(projectDir, data);
-
-  // Create agent directory
-  const agentDir = join(projectDir, "agents", name);
-  mkdirSync(agentDir, { recursive: true });
-
-  console.log(`Added agent: ${name} (${description})`);
-  console.log(`  Directory: ${agentDir}`);
+  createAgent(name, { dir });
 }
 
-function cmdAgentRemove(name: string) {
-  if (name === "main") {
-    console.error("Cannot remove the main agent.");
+function cmdAgentDelete(name: string) {
+  const dir = getAgentWorkingDir(name);
+  const shortDir = dir.replace(homedir(), "~");
+  if (!deleteAgent(name)) {
+    console.error(`Agent "${name}" does not exist.`);
     process.exit(1);
   }
-
-  const projectDir = getProjectDir();
-  const data = readAgentsJson(projectDir);
-
-  if (!data.agents[name]) {
-    console.error(`Agent "${name}" not found.`);
-    process.exit(1);
-  }
-
-  // Remove from all connections
-  for (const [, config] of Object.entries(data.agents)) {
-    config.connections = config.connections.filter(c => c !== name);
-  }
-
-  delete data.agents[name];
-  writeAgentsJson(projectDir, data);
-  console.log(`Removed agent: ${name}`);
+  console.log(`Deleted agent: ${name}`);
+  console.log(`Note: the working folder at ${shortDir} was not deleted. Remove it manually if needed.`);
 }
 
 function cmdAgentConnect(a: string, b: string) {
-  const projectDir = getProjectDir();
-  const data = readAgentsJson(projectDir);
-
-  if (!data.agents[a]) {
-    console.error(`Agent "${a}" not found.`);
+  const err = connectAgents(a, b);
+  if (err) {
+    console.error(err);
     process.exit(1);
   }
-  if (!data.agents[b]) {
-    console.error(`Agent "${b}" not found.`);
-    process.exit(1);
-  }
-
-  // Bidirectional connection
-  if (!data.agents[a].connections.includes(b)) {
-    data.agents[a].connections.push(b);
-  }
-  if (!data.agents[b].connections.includes(a)) {
-    data.agents[b].connections.push(a);
-  }
-
-  writeAgentsJson(projectDir, data);
-  console.log(`Connected: ${a} <-> ${b}`);
+  console.log(`Connected: ${a} -> ${b} (${a} can now ask ${b})`);
 }
 
 function cmdAgentDisconnect(a: string, b: string) {
-  const projectDir = getProjectDir();
-  const data = readAgentsJson(projectDir);
-
-  if (data.agents[a]) {
-    data.agents[a].connections = data.agents[a].connections.filter(c => c !== b);
+  const err = disconnectAgents(a, b);
+  if (err) {
+    console.error(err);
+    process.exit(1);
   }
-  if (data.agents[b]) {
-    data.agents[b].connections = data.agents[b].connections.filter(c => c !== a);
+  console.log(`Disconnected: ${a} -/-> ${b}`);
+}
+
+function cmdAgentMemory(name: string, action?: string) {
+  const dataDir = join(OCTYBOT_HOME, "data", name, name);
+  if (!existsSync(dataDir)) {
+    console.error(`No data directory for agent "${name}". Has it been used?`);
+    process.exit(1);
   }
 
-  writeAgentsJson(projectDir, data);
-  console.log(`Disconnected: ${a} <-> ${b}`);
+  const flagFile = join(dataDir, "memory-disabled");
+  const isDisabled = existsSync(flagFile);
+
+  if (!action) {
+    console.log(`Memory for "${name}": ${isDisabled ? "off" : "on"}`);
+    return;
+  }
+
+  if (action === "on") {
+    if (isDisabled) {
+      const { unlinkSync } = require("fs");
+      unlinkSync(flagFile);
+    }
+    console.log(`Memory enabled for "${name}".`);
+  } else if (action === "off") {
+    if (!isDisabled) {
+      const { writeFileSync } = require("fs");
+      writeFileSync(flagFile, "");
+    }
+    console.log(`Memory disabled for "${name}".`);
+  } else {
+    console.error("Usage: octybot agent memory <name> [on|off]");
+    process.exit(1);
+  }
+}
+
+// ── Config commands ──
+
+function cmdConfigBackupDir(path?: string) {
+  if (path) {
+    setBackupDir(path);
+    console.log(`Backup directory set to: ${getBackupDir()}`);
+  } else {
+    console.log(`Backup directory: ${getBackupDir()}`);
+  }
+}
+
+// ── Tool commands ──
+
+async function cmdToolsInstall(toolPath: string) {
+  const result = await installTool(toolPath);
+  if (!result.success) {
+    console.error(`Failed to install tool: ${result.error}`);
+    process.exit(1);
+  }
+}
+
+function cmdToolsList() {
+  const tools = listTools();
+  if (tools.length === 0) {
+    console.log("No tools installed.");
+    return;
+  }
+
+  console.log("Installed tools:");
+  for (const tool of tools) {
+    const agentStr = tool.agents.length > 0
+      ? tool.agents.map(a => a.agent).join(", ")
+      : "none";
+    console.log(`  ${tool.name.padEnd(20)}${(tool.language || "").padEnd(12)}agents: ${agentStr}`);
+    if (tool.description) {
+      console.log(`    ${tool.description}`);
+    }
+  }
+}
+
+async function cmdToolsAdd(toolName: string, agent?: string) {
+  const err = addToolToAgent(toolName, agent);
+  if (err) {
+    console.error(err);
+    process.exit(1);
+  }
+  const agentName = agent || getActiveProject();
+  console.log(`Added tool "${toolName}" to agent "${agentName}".`);
+}
+
+function cmdToolsRemove(toolName: string, agent?: string) {
+  const err = removeToolFromAgent(toolName, agent);
+  if (err) {
+    console.error(err);
+    process.exit(1);
+  }
+  const agentName = agent || getActiveProject();
+  console.log(`Removed tool "${toolName}" from agent "${agentName}".`);
+}
+
+function cmdToolsInfo(toolName: string) {
+  const info = getToolInfo(toolName);
+  if (!info) {
+    console.error(`Tool "${toolName}" not found.`);
+    process.exit(1);
+  }
+
+  console.log(`Tool: ${info.name}`);
+  console.log(`  Source: ${info.source_path}`);
+  console.log(`  Language: ${info.language || "unknown"}`);
+  console.log(`  Installed: ${info.installed_at}`);
+  if (info.description) {
+    console.log(`  Description: ${info.description}`);
+  }
+  if (info.agents.length > 0) {
+    console.log(`  Used by:`);
+    for (const a of info.agents) {
+      console.log(`    ${a.agent}`);
+    }
+  } else {
+    console.log(`  Used by: none`);
+  }
 }
 
 // ── Status ──
 
 async function cmdStatus() {
-  const activeProject = getActiveProject();
+  const activeAgent = getActiveProject();
   const workerUrl = readConfigField("worker_url");
 
   console.log("Octybot Status");
   console.log("==============");
   console.log(`  Home:           ${OCTYBOT_HOME}`);
-  console.log(`  Active project: ${activeProject}`);
+  console.log(`  Active agent:   ${activeAgent}`);
   console.log(`  Worker URL:     ${workerUrl || "(not configured)"}`);
+  console.log(`  Backup dir:     ${getBackupDir()}`);
 
   // Check agent service
   const agentService = join(OCTYBOT_HOME, "bin", "service.ts");
@@ -243,21 +291,16 @@ async function cmdStatus() {
     console.log("  Agent service:  not installed");
   }
 
-  // List projects
-  const projectsDir = join(OCTYBOT_HOME, "projects");
-  if (existsSync(projectsDir)) {
-    const projects = readdirSync(projectsDir, { withFileTypes: true })
-      .filter(d => d.isDirectory())
-      .map(d => d.name);
-    console.log(`  Projects:       ${projects.join(", ") || "none"}`);
+  // List agents
+  const agents = listAgents();
+  if (agents.length > 0) {
+    console.log(`  Agents:         ${agents.map(a => a.name).join(", ")}`);
   }
 
-  // Show agents for active project
-  const projectDir = getProjectDir();
-  if (existsSync(join(projectDir, "agents.json"))) {
-    const data = readAgentsJson(projectDir);
-    const agentNames = Object.keys(data.agents);
-    console.log(`  Agents:         ${agentNames.join(", ")}`);
+  // Show installed tools
+  const tools = listTools();
+  if (tools.length > 0) {
+    console.log(`  Tools:          ${tools.map(t => t.name).join(", ")}`);
   }
 }
 
@@ -297,36 +340,18 @@ switch (cmd) {
     await cmdUpdate();
     break;
 
-  case "project":
-    switch (sub) {
-      case "list":
-        cmdProjectList();
-        break;
-      case "create":
-        if (!args[2]) { console.error("Usage: octybot project create <name> [--dir <path>]"); process.exit(1); }
-        await cmdProjectCreate(args[2], args.slice(3));
-        break;
-      case "switch":
-        if (!args[2]) { console.error("Usage: octybot project switch <name>"); process.exit(1); }
-        cmdProjectSwitch(args[2]);
-        break;
-      default:
-        console.log("Usage: octybot project <list|create|switch>");
-    }
-    break;
-
   case "agent":
     switch (sub) {
       case "list":
         cmdAgentList();
         break;
-      case "add":
-        if (!args[2] || !args[3]) { console.error("Usage: octybot agent add <name> <description>"); process.exit(1); }
-        cmdAgentAdd(args[2], args.slice(3).join(" "));
+      case "create":
+        if (!args[2]) { console.error("Usage: octybot agent create <name> [--dir <path>]"); process.exit(1); }
+        await cmdAgentCreate(args[2], args.slice(3));
         break;
-      case "remove":
-        if (!args[2]) { console.error("Usage: octybot agent remove <name>"); process.exit(1); }
-        cmdAgentRemove(args[2]);
+      case "delete":
+        if (!args[2]) { console.error("Usage: octybot agent delete <name>"); process.exit(1); }
+        cmdAgentDelete(args[2]);
         break;
       case "connect":
         if (!args[2] || !args[3]) { console.error("Usage: octybot agent connect <a> <b>"); process.exit(1); }
@@ -336,8 +361,48 @@ switch (cmd) {
         if (!args[2] || !args[3]) { console.error("Usage: octybot agent disconnect <a> <b>"); process.exit(1); }
         cmdAgentDisconnect(args[2], args[3]);
         break;
+      case "memory":
+        if (!args[2]) { console.error("Usage: octybot agent memory <name> [on|off]"); process.exit(1); }
+        cmdAgentMemory(args[2], args[3]);
+        break;
       default:
-        console.log("Usage: octybot agent <list|add|remove|connect|disconnect>");
+        console.log("Usage: octybot agent <create|list|delete|connect|disconnect|memory>");
+    }
+    break;
+
+  case "config":
+    switch (sub) {
+      case "backup-dir":
+        cmdConfigBackupDir(args[2]);
+        break;
+      default:
+        console.log("Usage: octybot config <backup-dir>");
+    }
+    break;
+
+  case "tools":
+    switch (sub) {
+      case "install":
+        if (!args[2]) { console.error("Usage: octybot tools install <path>"); process.exit(1); }
+        await cmdToolsInstall(args[2]);
+        break;
+      case "list":
+        cmdToolsList();
+        break;
+      case "add":
+        if (!args[2]) { console.error("Usage: octybot tools add <tool> [agent]"); process.exit(1); }
+        await cmdToolsAdd(args[2], args[3]);
+        break;
+      case "remove":
+        if (!args[2]) { console.error("Usage: octybot tools remove <tool> [agent]"); process.exit(1); }
+        cmdToolsRemove(args[2], args[3]);
+        break;
+      case "info":
+        if (!args[2]) { console.error("Usage: octybot tools info <tool>"); process.exit(1); }
+        cmdToolsInfo(args[2]);
+        break;
+      default:
+        console.log("Usage: octybot tools <install|list|add|remove|info>");
     }
     break;
 
@@ -358,14 +423,18 @@ Commands:
   init                              First-time setup (interactive wizard)
   install                           Install/update global files (~/.octybot/)
   update                            Same as install (preserves config)
-  project list                      List projects
-  project create <name> [--dir p]   Create a project (optional custom dir)
-  project switch <name>             Switch active project
+  agent create <name> [--dir p]     Create an agent (optional custom dir)
   agent list                        List agents
-  agent add <name> <desc>           Add an agent
-  agent remove <name>               Remove an agent
+  agent delete <name>               Delete an agent
   agent connect <a> <b>             Connect two agents
   agent disconnect <a> <b>          Disconnect two agents
+  agent memory <name> [on|off]     Toggle agent memory
+  config backup-dir [<path>]        Get/set backup directory
+  tools install <path>              Install a tool (generates skill via admin agent)
+  tools list                        List installed tools
+  tools add <tool> [agent]          Add tool to agent
+  tools remove <tool> [agent]       Remove tool from agent
+  tools info <tool>                 Show tool details
   status                            Show system status
   deploy [worker|pwa|all]           Deploy components`);
 }

@@ -61,7 +61,7 @@ CLI (octybot) = creates the project and/or sets up the folder so Claude Code wor
 - **Memory hooks** (`UserPromptSubmit` / `Stop`) — the seam between Claude Code and the memory system. Every message triggers retrieval before Claude sees it, and storage after Claude responds. Claude never knows the memory system exists.
 - **Agent polling** — the Agent service polls `GET /messages/pending` every second. The Worker is the single source of truth for what needs processing.
 - **SSE streaming** — response chunks flow from Agent → Worker → PWA via Server-Sent Events. The PWA renders them progressively as they arrive.
-- **Delegation bus** — agents communicate via a SQLite message queue (`.bus.db`). Slash commands like `/ask-<agent>` send messages through the bus and spawn the target agent.
+- **Delegation bus** — agents communicate via a SQLite message queue (`.bus.db`). Claude Code skills (`.claude/skills/ask-<agent>/`) invoke the delegation script, which sends messages through the bus and spawns the target agent.
 
 ## File Layout (`~/.octybot/`)
 

@@ -1,12 +1,12 @@
 ---
-description: Ask the {{AGENT_NAME}} agent to handle a task
+description: Ask {{AGENT_NAME}} — {{AGENT_DESCRIPTION}}
 argument-hint: <task description>
 allowed-tools: Bash
 ---
 
 # Ask {{AGENT_NAME}}
 
-Delegate a task to the **{{AGENT_NAME}}** agent ({{AGENT_DESCRIPTION}}).
+**What this agent does:** {{AGENT_DESCRIPTION}}
 
 ## Instructions
 

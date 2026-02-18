@@ -12,41 +12,41 @@ Octybot wraps Claude Code with a mobile chat interface, real-time streaming, voi
 
 ## Core Concepts
 
-### Projects
-
-A **project** is the top-level container. It's a folder at `~/.octybot/projects/<name>/` that holds everything — agents, their memory, and their configuration.
-
-```
-~/.octybot/projects/
-  work/                  # a project
-  personal/              # another project
-  side-hustle/           # another project
-```
-
-Projects are fully isolated. Switching projects switches everything — agents, memory, tools.
-
 ### Agents
 
-Projects contain **agents**. There is one type of agent. Every agent is a Claude Code instance with:
+An **agent** is the fundamental unit. One agent = one folder = one memory = zero or more tools. Each agent lives at `~/.octybot/agents/<name>/` and is a complete, self-contained Claude Code instance.
+
+```
+~/.octybot/agents/
+  work/                  # an agent
+  personal/              # another agent
+  research/              # another agent
+```
+
+When using Claude Code directly, you `cd` into the agent folder and run `claude`. In the phone app, agents are created through the UI — each gets its own folder behind the scenes.
+
+Agents are fully isolated. Switching agents switches everything — memory, tools, configuration.
+
+### What Makes an Agent
+
+Every agent is a Claude Code instance with:
 
 - **1 memory store** — its own knowledge graph
 - **0 or more tools** — Python scripts it can use
 - **0 or more connections** — other agents it can talk to
 
-Every project starts with a **Main Agent** — the one you chat with from your phone. It can be renamed. Beyond that, you create as many agents as you need.
-
 An agent that has an Airtable tool and knows about Airtable is an "Airtable agent." An agent that has no tools but knows about your team is a "personal agent." They're the same thing — just configured differently.
 
 ### How Agents Talk to Each Other
 
-Any agent can be taught to talk to any other agent. When you connect two agents, the calling agent gets one thing: how to send a message. Nothing else. It doesn't know what tools the other agent has, what it remembers, or how it works. It just sends a natural language request and gets a response back.
+Any agent can be connected to any other agent. When you connect two agents, the calling agent gets one thing: how to send a message. Nothing else. It doesn't know what tools the other agent has, what it remembers, or how it works. It just sends a natural language request and gets a response back.
 
 ```
-Main Agent: "Get all Q1 budget entries from the Projects table"
+Work Agent: "Get all Q1 budget entries from the Projects table"
     ↓ (message queue)
 Airtable Agent: [uses tool, queries API, returns results]
     ↓ (message queue)
-Main Agent: "Here's what I found in your Q1 budget..."
+Work Agent: "Here's what I found in your Q1 budget..."
 ```
 
 ### Memory
@@ -57,14 +57,23 @@ For a detailed technical explanation, see [How Memory Works](docs/memory.md).
 
 ### Tools
 
-Tools are Python scripts in `~/.octybot/tools/`. Each tool is a single `.py` file that does one thing — query an API, run a script, transform data. An agent can have zero tools or many.
+Tools are scripts in `~/.octybot/tools/`. Each tool is a single file that does one thing — query an API, run a script, transform data. An agent can have zero tools or many. Tools are installed via the CLI, which uses an admin agent (Claude Code Opus) to auto-generate a Claude Code skill (slash command) for each tool.
+
+```bash
+octybot tools install path/to/airtable.py   # installs tool + generates skill
+octybot tools add airtable                   # adds tool to current agent
+octybot tools list                           # list installed tools
+octybot tools info airtable                  # show tool details + which agents use it
+```
 
 ```
-~/.octybot/tools/
-  airtable.py            # Airtable API wrapper
-  github.py              # GitHub operations
-  slack.py               # Slack messaging
-  calendar.py            # Google Calendar
+~/.octybot/
+  tools/                           # Installed tool scripts
+    airtable.py
+    github.py
+  skills/                          # Auto-generated skill files (slash commands)
+    airtable.md
+    github.md
 ```
 
 ## What You Need
@@ -93,14 +102,14 @@ octybot init
 
 The interactive wizard walks you through Cloudflare setup, API keys, deploying, and pairing your phone. It's idempotent — safe to re-run if anything fails.
 
-### Create projects
+### Create agents
 
 ```bash
-# Default location (~/.octybot/projects/work/)
-octybot project create work
+# Default location (~/.octybot/agents/work/)
+octybot agent create work
 
 # Custom working directory — use Claude Code with memory in any folder
-octybot project create work --dir ~/Projects/work
+octybot agent create work --dir ~/Projects/work
 
 # Use it
 cd ~/Projects/work && claude
@@ -187,7 +196,7 @@ Then re-run the installer to patch the URL into the installed copies, and deploy
 ```bash
 octybot install                # enter your Worker URL when prompted
 octybot deploy                 # redeploys PWA with correct URL
-octybot project create default
+octybot agent create default
 ```
 
 #### 5. Start the agent
@@ -204,6 +213,26 @@ Open `https://octybot-pwa.pages.dev` in your phone's browser. Enter the pairing 
 
 </details>
 
+### CLI Reference
+
+```bash
+octybot agent create <name> [--dir p]     # create agent (optional custom dir)
+octybot agent list                        # list agents
+octybot agent switch <name>               # switch active agent
+octybot agent delete <name>               # delete agent and data
+octybot agent connect <a> <b>             # connect two agents
+octybot agent disconnect <a> <b>          # disconnect two agents
+octybot agent memory <name> [on|off]     # toggle agent memory
+octybot config backup-dir [<path>]        # get/set backup directory
+octybot tools install <path>              # install tool (generates skill via admin agent)
+octybot tools list                        # list installed tools
+octybot tools add <tool> [agent]          # add tool to agent
+octybot tools remove <tool> [agent]       # remove tool from agent
+octybot tools info <tool>                 # show tool details + which agents use it
+octybot status                            # show system status
+octybot deploy [worker|pwa|all]           # deploy components
+```
+
 ### After setup
 
 Add the PWA to your home screen for a native app feel (Safari > Share > Add to Home Screen).
@@ -212,19 +241,21 @@ Add the PWA to your home screen for a native app feel (Safari > Share > Add to H
 
 ```
 ~/.octybot/
-  config.json                        # worker URL, active project
+  config.json                        # worker URL, active agent, backup dir
   bin/                               # agent runner, service, deploy, setup
+    lib/                             # shared functions (agents, tools, backup)
   core/                              # shared core (memory engine, message bus, agent runtime)
-  tools/                             # Python tool scripts (.py files)
-  data/<project>/<agent>/            # per-agent data (memory.db, debug, snapshots)
-  projects/<name>/                   # project dirs
-    agents.json                      #   agent registry (names, connections, skills)
-    agents/
-      main/                          #   Main Agent working dir
-        CLAUDE.md                    #     agent instructions
-        .claude/settings.json        #     hooks config
-      airtable/                      #   Airtable agent
-      github/                        #   GitHub agent
+  tools/                             # installed tool scripts
+  skills/                            # auto-generated skill files (slash commands)
+  admin_agent/                       # Claude Code Opus workspace for tool analysis
+  tools.db                           # SQLite DB mapping tools ↔ skills ↔ agents
+  data/<name>/<name>/                # per-agent data (memory.db, debug, snapshots)
+  agents/<name>/                     # agent dirs
+    agent.json                       #   agent config (description, connections, tools)
+    CLAUDE.md                        #   agent instructions
+    .claude/settings.json            #   hooks config
+    .claude/commands/                #   user slash commands (delegate, tools)
+    .claude/skills/ask-<other>/      #   auto-generated skills for agent delegation
 ```
 
 | Component | Source | Installed to | Runs on |
@@ -263,14 +294,19 @@ No external dependencies, no Redis, no network. Messages are rows in a SQLite ta
 ### Setting Up Agent Connections
 
 ```bash
-# Create an agent with a tool
-octybot agent create airtable --tool airtable.py
+# Create agents
+octybot agent create work
+octybot agent create airtable
 
-# Connect it to the main agent
-octybot agent connect main airtable --skill "Ask Airtable"
+# Install and assign a tool
+octybot tools install path/to/airtable.py
+octybot tools add airtable airtable
+
+# Connect (one-directional: work can ask airtable)
+octybot agent connect work airtable
 ```
 
-This gives the Main Agent a skill that says: *"To interact with Airtable, send a message to the Airtable Agent. Describe what you need in plain English. You'll receive the results back."* That's it. No API docs, no tool schemas. Just talk to the agent.
+This creates a Claude Code skill in the work agent's `.claude/skills/ask-airtable/` folder. The skill description comes from the airtable agent's `agent.json`. Claude sees it in its context and invokes it autonomously — when you ask the work agent something about Airtable, it delegates automatically. No slash commands, no manual invocation. Claude just knows.
 
 ## How It Stays Alive
 
@@ -308,11 +344,11 @@ bun src/agent/index.ts
 
 **Voice mode** — Hold-to-talk voice input with transcription, and text-to-speech responses.
 
-**Multi-project support** — Run multiple independent projects, each with their own agents, memory, and configuration. Switch between them from the phone app.
+**Multi-agent support** — Run multiple independent agents, each with their own memory and configuration. Switch between them from the phone app.
 
 **Long-term memory** — Agents have permanent memory — people, facts, events, preferences, instructions — stored in a local graph database with vector search. They remember what you told them last week the same way a person would. See [How Memory Works](docs/memory.md) for the full technical breakdown.
 
-**Inter-agent delegation** — Agents delegate tasks to specialized agents. The Main Agent doesn't need to know how Airtable works — it just asks the Airtable Agent.
+**Inter-agent delegation** — Agents delegate tasks to specialized agents. Your work agent doesn't need to know how Airtable works — it just asks the Airtable agent.
 
 ## Deploying Updates
 
@@ -345,21 +381,21 @@ OPENROUTER_API_KEY=sk-or-v1-your-key-here
 VOYAGE_API_KEY=pa-your-key-here
 ```
 
-Install globally and create a project:
+Install globally and create an agent:
 
 ```bash
 octybot install
-octybot project create default
+octybot agent create default
 ```
 
-### Creating projects
+### Creating agents
 
 ```bash
-# Default location (~/.octybot/projects/work/)
-octybot project create work
+# Default location (~/.octybot/agents/work/)
+octybot agent create work
 
 # Custom working directory — use Claude Code with memory in any folder
-octybot project create work --dir ~/Projects/work
+octybot agent create work --dir ~/Projects/work
 
 # Then use it
 cd ~/Projects/work && claude
@@ -419,5 +455,5 @@ Named volumes persist Cloudflare and Claude auth between sessions. `docker compo
 | Worker errors | Check logs in [Cloudflare dashboard](https://dash.cloudflare.com) > Workers > octybot-worker > Logs |
 | Memory not working | Check `.env` exists with valid keys, run `/octybot-memory active` |
 | Wrangler auth expired | Re-run `npx wrangler login` (tokens expire after ~1hr) |
-| Wrong project | Check `~/.octybot/config.json` for active_project |
+| Wrong agent | Check `~/.octybot/config.json` for active_project |
 | Global install stale | Run `octybot update` to sync latest code |

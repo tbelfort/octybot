@@ -1,5 +1,9 @@
 /**
  * Tests for the Agent Registry.
+ *
+ * The registry scans ~/.octybot/agents/ (and projects/) for agent dirs,
+ * reading agent.json from each. Tests simulate this by creating a temp
+ * directory structure with agents/<name>/agent.json.
  */
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { AgentRegistry } from "../src/delegation/registry";
@@ -8,12 +12,22 @@ import { join } from "path";
 
 const TEST_DIR = join(import.meta.dir, ".test-registry");
 
-function writeAgentsJson(agents: Record<string, { description: string; connections: string[] }>) {
-  writeFileSync(join(TEST_DIR, "agents.json"), JSON.stringify({ agents }, null, 2));
+/** Create an agent dir with agent.json inside TEST_DIR/agents/<name>/ */
+function createAgent(name: string, config: { description: string; connections: string[]; tools?: string[] }) {
+  const agentDir = join(TEST_DIR, "agents", name);
+  mkdirSync(agentDir, { recursive: true });
+  writeFileSync(join(agentDir, "agent.json"), JSON.stringify(config, null, 2));
+}
+
+/** Create a legacy agent dir with agents.json inside TEST_DIR/projects/<name>/ */
+function createLegacyAgent(name: string, config: { description: string; connections: string[] }) {
+  const agentDir = join(TEST_DIR, "projects", name);
+  mkdirSync(agentDir, { recursive: true });
+  writeFileSync(join(agentDir, "agents.json"), JSON.stringify({ agents: { [name]: config } }, null, 2));
 }
 
 beforeEach(() => {
-  mkdirSync(TEST_DIR, { recursive: true });
+  mkdirSync(join(TEST_DIR, "agents"), { recursive: true });
 });
 
 afterEach(() => {
@@ -23,20 +37,16 @@ afterEach(() => {
 });
 
 describe("AgentRegistry", () => {
-  it("loads valid agents.json", () => {
-    writeAgentsJson({
-      main: { description: "Primary agent", connections: ["researcher"] },
-      researcher: { description: "Research specialist", connections: ["main"] },
-    });
+  it("scans agent directories", () => {
+    createAgent("main", { description: "Primary agent", connections: ["researcher"] });
+    createAgent("researcher", { description: "Research specialist", connections: [] });
 
     const registry = new AgentRegistry(TEST_DIR);
-    expect(registry.list()).toEqual(["main", "researcher"]);
+    expect(registry.list().sort()).toEqual(["main", "researcher"]);
   });
 
   it("get returns agent config", () => {
-    writeAgentsJson({
-      main: { description: "Primary agent", connections: [] },
-    });
+    createAgent("main", { description: "Primary agent", connections: [] });
 
     const registry = new AgentRegistry(TEST_DIR);
     const config = registry.get("main");
@@ -46,18 +56,14 @@ describe("AgentRegistry", () => {
   });
 
   it("get returns null for unknown agent", () => {
-    writeAgentsJson({
-      main: { description: "Primary agent", connections: [] },
-    });
+    createAgent("main", { description: "Primary agent", connections: [] });
 
     const registry = new AgentRegistry(TEST_DIR);
     expect(registry.get("unknown")).toBeNull();
   });
 
   it("hasAgent checks existence", () => {
-    writeAgentsJson({
-      main: { description: "Primary agent", connections: [] },
-    });
+    createAgent("main", { description: "Primary agent", connections: [] });
 
     const registry = new AgentRegistry(TEST_DIR);
     expect(registry.hasAgent("main")).toBe(true);
@@ -65,11 +71,9 @@ describe("AgentRegistry", () => {
   });
 
   it("connections returns agent connections", () => {
-    writeAgentsJson({
-      main: { description: "Primary", connections: ["researcher", "writer"] },
-      researcher: { description: "Research", connections: ["main"] },
-      writer: { description: "Writer", connections: ["main"] },
-    });
+    createAgent("main", { description: "Primary", connections: ["researcher", "writer"] });
+    createAgent("researcher", { description: "Research", connections: ["main"] });
+    createAgent("writer", { description: "Writer", connections: ["main"] });
 
     const registry = new AgentRegistry(TEST_DIR);
     expect(registry.connections("main")).toEqual(["researcher", "writer"]);
@@ -78,50 +82,38 @@ describe("AgentRegistry", () => {
   });
 
   it("canConnect checks directional connection", () => {
-    writeAgentsJson({
-      main: { description: "Primary", connections: ["researcher"] },
-      researcher: { description: "Research", connections: [] },
-    });
+    createAgent("main", { description: "Primary", connections: ["researcher"] });
+    createAgent("researcher", { description: "Research", connections: [] });
 
     const registry = new AgentRegistry(TEST_DIR);
     expect(registry.canConnect("main", "researcher")).toBe(true);
     expect(registry.canConnect("researcher", "main")).toBe(false);
   });
 
-  it("throws on missing agents.json", () => {
-    expect(() => new AgentRegistry(TEST_DIR)).toThrow("agents.json not found");
+  it("returns empty list when no agents exist", () => {
+    const registry = new AgentRegistry(TEST_DIR);
+    expect(registry.list()).toEqual([]);
   });
 
-  it("throws on invalid connection target", () => {
-    writeAgentsJson({
-      main: { description: "Primary", connections: ["ghost"] },
-    });
+  it("reads legacy agents.json from projects/", () => {
+    createLegacyAgent("old-agent", { description: "Legacy agent", connections: [] });
 
-    expect(() => new AgentRegistry(TEST_DIR)).toThrow('connects to unknown agent "ghost"');
+    const registry = new AgentRegistry(TEST_DIR);
+    expect(registry.hasAgent("old-agent")).toBe(true);
+    expect(registry.get("old-agent")!.description).toBe("Legacy agent");
   });
 
-  it("throws on missing description", () => {
-    writeFileSync(
-      join(TEST_DIR, "agents.json"),
-      JSON.stringify({ agents: { main: { connections: [] } } })
-    );
+  it("agents/ takes priority over projects/ for same name", () => {
+    createAgent("shared", { description: "New version", connections: [] });
+    createLegacyAgent("shared", { description: "Old version", connections: [] });
 
-    expect(() => new AgentRegistry(TEST_DIR)).toThrow('missing description');
-  });
-
-  it("throws on self-connection", () => {
-    writeAgentsJson({
-      main: { description: "Primary", connections: ["main"] },
-    });
-
-    expect(() => new AgentRegistry(TEST_DIR)).toThrow('cannot connect to itself');
+    const registry = new AgentRegistry(TEST_DIR);
+    expect(registry.get("shared")!.description).toBe("New version");
   });
 
   it("entries returns all agents", () => {
-    writeAgentsJson({
-      main: { description: "Primary", connections: [] },
-      helper: { description: "Helper", connections: [] },
-    });
+    createAgent("main", { description: "Primary", connections: [] });
+    createAgent("helper", { description: "Helper", connections: [] });
 
     const registry = new AgentRegistry(TEST_DIR);
     const entries = registry.entries();
