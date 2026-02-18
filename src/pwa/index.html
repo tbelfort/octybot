@@ -40,9 +40,12 @@
     <div id="sidebar-overlay"></div>
     <nav id="sidebar">
       <div class="sidebar-header">
-        <h3>Chats</h3>
+        <select id="sidebar-project-select" class="sidebar-project-select">
+          <option value="__all">All Projects</option>
+        </select>
         <button id="new-chat-btn">+ New</button>
       </div>
+      <div id="new-chat-target" class="new-chat-target"></div>
       <div id="conv-list"></div>
     </nav>
 
@@ -76,49 +79,93 @@
   <!-- Settings Modal -->
   <div id="settings-overlay">
     <div id="settings-panel">
-      <h3>Settings</h3>
-      <div class="settings-item">
-        <span class="label">Model</span>
-        <span class="value" id="settings-model">Opus</span>
+      <div class="settings-header">
+        <h3>Settings</h3>
+        <button id="settings-close">&times;</button>
       </div>
-      <div class="settings-item">
-        <span class="label">Device</span>
-        <span class="value" id="settings-device">—</span>
+      <div class="settings-tabs">
+        <button class="settings-tab active" data-tab="general">General</button>
+        <button class="settings-tab" data-tab="projects">Projects</button>
       </div>
-      <button id="usage-btn">View Usage &amp; Costs</button>
-      <div class="settings-divider"></div>
-      <div class="settings-item">
-        <span class="label">Session Timeout</span>
-        <span class="value"><input type="number" id="settings-timeout" min="1" max="168" value="24" class="settings-num-input"> hrs</span>
-      </div>
-      <div class="settings-item">
-        <span class="label">Max Sessions</span>
-        <span class="value"><input type="number" id="settings-pool-max" min="1" max="10" value="3" class="settings-num-input"></span>
-      </div>
-      <button id="settings-save-btn" class="settings-save-btn">Save Settings</button>
-      <button id="logout-btn">Unpair Device</button>
-    </div>
-  </div>
 
-  <!-- Usage Overlay -->
-  <div id="usage-overlay">
-    <div id="usage-panel">
-      <div class="usage-header">
-        <button id="usage-close">&larr;</button>
-        <h3>Usage &amp; Costs</h3>
-        <div class="usage-tabs">
-          <button class="usage-tab active" data-tab="daily">Daily</button>
-          <button class="usage-tab" data-tab="monthly">Monthly</button>
+      <!-- General Tab -->
+      <div id="tab-general" class="tab-pane active">
+        <div class="settings-item">
+          <span class="label">Device</span>
+          <span class="value" id="settings-device">—</span>
+        </div>
+        <div class="settings-item">
+          <span class="label">Model</span>
+          <span class="value" id="settings-model">Opus</span>
+        </div>
+        <div class="settings-divider"></div>
+        <div class="settings-section-title">Session</div>
+        <div class="settings-item">
+          <span class="label">Timeout</span>
+          <span class="value"><input type="number" id="settings-timeout" min="1" max="168" value="24" class="settings-num-input"> hrs</span>
+        </div>
+        <div class="settings-item">
+          <span class="label">Max Sessions</span>
+          <span class="value"><input type="number" id="settings-pool-max" min="1" max="10" value="3" class="settings-num-input"></span>
+        </div>
+        <div class="settings-divider"></div>
+        <div class="settings-section-title">Backup</div>
+        <div class="settings-item snapshot-dir-item">
+          <span class="label">Directory</span>
+          <button id="browse-snapshot-dir" class="browse-btn">Browse</button>
+        </div>
+        <input type="text" id="settings-snapshot-dir" placeholder="~/.octybot/data/snapshots/" class="settings-text-input settings-snapshot-dir-input">
+        <button id="settings-save-btn" class="settings-save-btn">Save Settings</button>
+        <div class="settings-divider"></div>
+        <div class="settings-section-title">Usage</div>
+        <div id="usage-summary" class="usage-summary">Loading...</div>
+        <button id="usage-detail-btn" class="usage-detail-btn">View Details</button>
+        <div id="usage-detail" class="usage-detail" style="display:none">
+          <div class="usage-detail-tabs">
+            <button class="usage-tab active" data-tab="daily">Daily</button>
+            <button class="usage-tab" data-tab="monthly">Monthly</button>
+          </div>
+          <div id="usage-content"></div>
+        </div>
+        <div class="settings-divider"></div>
+        <button id="logout-btn">Unpair Device</button>
+      </div>
+
+      <!-- Projects Tab -->
+      <div id="tab-projects" class="tab-pane">
+        <div id="project-list-view">
+          <div id="project-list"></div>
+          <button id="new-project-btn" class="memory-btn" style="width:100%;margin-top:12px">+ New Project</button>
+        </div>
+        <div id="project-detail-view" style="display:none">
+          <button id="project-back-btn" class="project-back-btn">&larr; Projects</button>
+          <h4 id="project-detail-name"></h4>
+          <div id="agent-list"></div>
+          <button id="new-agent-btn" class="memory-btn" style="width:100%;margin-top:12px">+ New Agent</button>
+          <div class="settings-divider"></div>
+          <button id="delete-project-btn" class="memory-clear-btn">Delete Project</button>
         </div>
       </div>
-      <div id="usage-content">
-        <p class="usage-loading">Loading...</p>
+    </div>
+  </div>
+
+  <!-- New Project Dialog -->
+  <div id="new-project-overlay" class="dialog-overlay">
+    <div class="dialog-panel">
+      <h3>New Project</h3>
+      <label class="dialog-label">Name</label>
+      <input id="new-project-name" type="text" class="dialog-input" placeholder="my-project" autocomplete="off">
+      <label class="dialog-label">Working Directory <span class="dialog-hint">(optional)</span></label>
+      <input id="new-project-dir" type="text" class="dialog-input" placeholder="Leave empty for default">
+      <div class="dialog-actions">
+        <button id="new-project-cancel" class="dialog-btn dialog-btn-cancel">Cancel</button>
+        <button id="new-project-create" class="dialog-btn dialog-btn-primary">Create</button>
       </div>
     </div>
   </div>
 
   </div>
 
-  <script src="app.js"></script>
+  <script src="dist/app.js"></script>
 </body>
 </html>

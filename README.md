@@ -76,7 +76,40 @@ Tools are Python scripts in `~/.octybot/tools/`. Each tool is a single `.py` fil
 
 ## Quick Start
 
-### Option A: Claude Code (recommended)
+### Install
+
+Requires [Bun](https://bun.sh) and [Node.js](https://nodejs.org):
+
+```bash
+curl -fsSL https://bun.sh/install | bash    # if you don't have bun
+npm install -g octybot
+```
+
+### First-time setup
+
+```bash
+octybot init
+```
+
+The interactive wizard walks you through Cloudflare setup, API keys, deploying, and pairing your phone. It's idempotent — safe to re-run if anything fails.
+
+### Create projects
+
+```bash
+# Default location (~/.octybot/projects/work/)
+octybot project create work
+
+# Custom working directory — use Claude Code with memory in any folder
+octybot project create work --dir ~/Projects/work
+
+# Use it
+cd ~/Projects/work && claude
+```
+
+### Other options
+
+<details>
+<summary>Claude Code setup (let Claude do it)</summary>
 
 Install [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), clone the repo, and let Claude handle the rest:
 
@@ -87,32 +120,18 @@ cd octybot
 claude
 ```
 
-Then say **"set this up"**. Claude reads the included setup instructions and runs everything — installs tools, creates Cloudflare resources, deploys, patches configs. You just authenticate when prompted and paste your API key.
+Then say **"set this up"**. Claude reads the included setup instructions and runs everything.
 
-### Option B: Automated script
-
-If you already have [Bun](https://bun.sh) and [Node.js](https://nodejs.org) installed:
-
-```bash
-git clone https://github.com/tbelfort/octybot.git
-cd octybot
-bun setup.ts
-```
-
-The script walks you through everything interactively. It's idempotent — safe to re-run if anything fails.
-
-### Option C: Manual setup
+</details>
 
 <details>
-<summary>Step-by-step manual installation</summary>
+<summary>Manual setup (step-by-step)</summary>
 
 #### 1. Install tools
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-npm install -g wrangler @anthropic-ai/claude-code
-git clone https://github.com/tbelfort/octybot.git
-cd octybot
+npm install -g wrangler @anthropic-ai/claude-code octybot
 ```
 
 If you don't have `npm`, install [Node.js LTS](https://nodejs.org) first. After installing Claude Code, run `claude` once and sign in.
@@ -149,18 +168,16 @@ bun install
 
 #### 3. Install globally
 
-Run the global installer — it copies files to `~/.octybot/` and prompts for your Worker URL and database ID:
-
 ```bash
-bun memory/install-global.ts
+octybot install
 ```
 
-For the first run, enter your database ID (from step 2) and leave the Worker URL blank — you'll get it after deploying.
+The installer copies files to `~/.octybot/` and prompts for your Worker URL and database ID. For the first run, enter your database ID (from step 2) and leave the Worker URL blank — you'll get it after deploying.
 
 #### 4. Deploy
 
 ```bash
-bun deploy.ts
+octybot deploy
 ```
 
 Note your Worker URL from the output: `https://octybot-worker.YOUR-SUBDOMAIN.workers.dev`
@@ -168,9 +185,9 @@ Note your Worker URL from the output: `https://octybot-worker.YOUR-SUBDOMAIN.wor
 Then re-run the installer to patch the URL into the installed copies, and deploy again:
 
 ```bash
-bun memory/install-global.ts    # enter your Worker URL when prompted
-bun deploy.ts                   # redeploys PWA with correct URL
-bun bin/setup-project.ts default
+octybot install                # enter your Worker URL when prompted
+octybot deploy                 # redeploys PWA with correct URL
+octybot project create default
 ```
 
 #### 5. Start the agent
@@ -300,17 +317,18 @@ bun src/agent/index.ts
 ## Deploying Updates
 
 ```bash
-bun deploy.ts              # worker + PWA (most common)
-bun deploy.ts all           # worker + PWA + reinstall agent
-bun deploy.ts worker        # worker only
-bun deploy.ts pwa           # PWA only
-bun deploy.ts agent         # reinstall agent service
+octybot deploy              # worker + PWA (most common)
+octybot deploy all          # worker + PWA + reinstall agent
+octybot deploy worker       # worker only
+octybot deploy pwa          # PWA only
+octybot deploy agent        # reinstall agent service
 ```
 
-After updating source code, re-run the global installer to sync `~/.octybot/`:
+After updating the package, re-sync `~/.octybot/`:
 
 ```bash
-bun memory/install-global.ts
+npm update -g octybot
+octybot update
 ```
 
 ## Setting Up Memory
@@ -330,9 +348,24 @@ VOYAGE_API_KEY=pa-your-key-here
 Install globally and create a project:
 
 ```bash
-bun memory/install-global.ts
-bun bin/setup-project.ts default
+octybot install
+octybot project create default
 ```
+
+### Creating projects
+
+```bash
+# Default location (~/.octybot/projects/work/)
+octybot project create work
+
+# Custom working directory — use Claude Code with memory in any folder
+octybot project create work --dir ~/Projects/work
+
+# Then use it
+cd ~/Projects/work && claude
+```
+
+When `--dir` is used, hooks and `CLAUDE.md` are written to the custom directory while memory data stays in `~/.octybot/data/`. This lets you use Octybot's memory system in existing project folders on your laptop.
 
 ### Memory commands
 
@@ -387,4 +420,4 @@ Named volumes persist Cloudflare and Claude auth between sessions. `docker compo
 | Memory not working | Check `.env` exists with valid keys, run `/octybot-memory active` |
 | Wrangler auth expired | Re-run `npx wrangler login` (tokens expire after ~1hr) |
 | Wrong project | Check `~/.octybot/config.json` for active_project |
-| Global install stale | Re-run `bun memory/install-global.ts` to sync latest code |
+| Global install stale | Run `octybot update` to sync latest code |

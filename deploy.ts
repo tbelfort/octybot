@@ -11,13 +11,42 @@
  *   bun deploy.ts agent          # reinstall agent service only
  */
 
-import { resolve } from "path";
-import { readFileSync } from "fs";
+import { resolve, join } from "path";
+import { existsSync, readFileSync } from "fs";
+import { homedir } from "os";
+
+// Inlined from shared/shell.ts — avoids import path issues when deploy.ts
+// is copied to ~/.octybot/bin/ during global install.
+async function execCmd(
+  cmd: string[],
+  opts: { cwd?: string } = {}
+): Promise<{ exitCode: number; ok: boolean; stdout: string; stderr: string }> {
+  const proc = Bun.spawn(cmd, { cwd: opts.cwd, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  const exitCode = await proc.exited;
+  return { exitCode, ok: exitCode === 0, stdout: stdout.trim(), stderr: stderr.trim() };
+}
 
 const ROOT = resolve(import.meta.dir);
-const WORKER_DIR = resolve(ROOT, "src/worker");
-const PWA_DIR = resolve(ROOT, "src/pwa");
-const AGENT_SERVICE = resolve(ROOT, "src/agent/service.ts");
+const OCTYBOT_HOME = process.env.OCTYBOT_HOME || join(homedir(), ".octybot");
+
+// Support both global install and source repo paths
+const GLOBAL_WORKER_DIR = join(OCTYBOT_HOME, "worker");
+const GLOBAL_PWA_DIR = join(OCTYBOT_HOME, "pwa");
+const GLOBAL_AGENT_SERVICE = join(OCTYBOT_HOME, "bin", "service.ts");
+
+const WORKER_DIR = existsSync(join(GLOBAL_WORKER_DIR, "wrangler.toml"))
+  ? GLOBAL_WORKER_DIR
+  : resolve(ROOT, "src/worker");
+const PWA_DIR = existsSync(join(GLOBAL_PWA_DIR, "app.js"))
+  ? GLOBAL_PWA_DIR
+  : resolve(ROOT, "src/pwa");
+const AGENT_SERVICE = existsSync(GLOBAL_AGENT_SERVICE)
+  ? GLOBAL_AGENT_SERVICE
+  : resolve(ROOT, "src/agent/service.ts");
 
 const PAGES_PROJECT = "octybot-pwa";
 const D1_DATABASE = "octybot-db";
@@ -37,27 +66,17 @@ async function run(
   opts: { cwd?: string; label?: string } = {}
 ): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   const label = opts.label ?? cmd.join(" ");
-  const proc = Bun.spawn(cmd, {
-    cwd: opts.cwd ?? ROOT,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const result = await execCmd(cmd, { cwd: opts.cwd ?? ROOT });
 
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  const exitCode = await proc.exited;
-
-  if (exitCode !== 0) {
+  if (!result.ok) {
     fail(label);
-    const output = (stderr || stdout).trim();
+    const output = (result.stderr || result.stdout).trim();
     if (output) console.error(`    ${output.split("\n").join("\n    ")}`);
-    return { ok: false, stdout, stderr };
+  } else {
+    ok(label);
   }
 
-  ok(label);
-  return { ok: true, stdout, stderr };
+  return { ok: result.ok, stdout: result.stdout, stderr: result.stderr };
 }
 
 // ── Deploy Steps ─────────────────────────────────────────────────────
@@ -70,10 +89,21 @@ async function deployWorker(): Promise<boolean> {
     const toml = readFileSync(resolve(WORKER_DIR, "wrangler.toml"), "utf-8");
     if (toml.includes('"REPLACE_ME"')) {
       fail("wrangler.toml has placeholder database_id");
-      console.error('    Run "bun setup.ts" first to configure the D1 database.');
+      console.error('    Run "bun setup.ts" or "bun src/memory/install-global.ts" first.');
       return false;
     }
   } catch {}
+
+  // Ensure npm dependencies are installed
+  const workerModules = resolve(WORKER_DIR, "node_modules");
+  if (!existsSync(workerModules)) {
+    console.log("  Installing worker dependencies...");
+    const npmResult = await run(
+      ["npm", "install"],
+      { cwd: WORKER_DIR, label: "npm install (worker)" }
+    );
+    if (!npmResult.ok) return false;
+  }
 
   // Run migrations
   const migrated = await run(

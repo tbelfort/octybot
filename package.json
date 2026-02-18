@@ -1,5 +1,33 @@
 {
+  "name": "octybot",
+  "version": "0.1.0",
+  "description": "AI agent system with persistent memory and voice",
+  "bin": {
+    "octybot": "bin/octybot.ts"
+  },
+  "files": [
+    "bin/",
+    "core/*.ts",
+    "memory/*.ts",
+    "memory/hooks/",
+    "src/agent/*.ts",
+    "src/agent/package.json",
+    "src/worker/src/",
+    "src/worker/wrangler.toml",
+    "src/worker/package.json",
+    "src/worker/package-lock.json",
+    "src/worker/tsconfig.json",
+    "src/worker/migrations/",
+    "src/pwa/",
+    "templates/",
+    "deploy.ts",
+    "setup.ts"
+  ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "esbuild": "^0.27.3"
   }
 }

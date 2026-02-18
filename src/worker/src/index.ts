@@ -36,6 +36,8 @@ import transcribeRoutes from "./routes/transcribe";
 import ttsRoutes from "./routes/tts";
 import usageRoutes from "./routes/usage";
 import settingsRoutes from "./routes/settings";
+import memoryRoutes from "./routes/memory";
+import projectRoutes from "./routes/projects";
 
 const app = new Hono<HonoEnv>();
 
@@ -68,6 +70,10 @@ app.use("/usage/*", jwtAuth);
 app.use("/usage", jwtAuth);
 app.use("/settings/*", jwtAuth);
 app.use("/settings", jwtAuth);
+app.use("/memory/*", jwtAuth);
+app.use("/memory", jwtAuth);
+app.use("/projects/*", jwtAuth);
+app.use("/projects", jwtAuth);
 
 // Mount authenticated routes
 app.route("/conversations", conversationRoutes);
@@ -76,6 +82,8 @@ app.route("/transcribe", transcribeRoutes);
 app.route("/tts", ttsRoutes);
 app.route("/usage", usageRoutes);
 app.route("/settings", settingsRoutes);
+app.route("/memory", memoryRoutes);
+app.route("/projects", projectRoutes);
 
 // 404
 app.notFound((c) => c.json({ error: "Not found" }, 404));
