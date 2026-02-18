@@ -1,6 +1,9 @@
 /**
  * Memory commands — poll and execute memory management commands from the worker.
  * Depends on: config.ts, api-client.ts, settings-sync.ts (for fetchSettings)
+ *
+ * Note: shared project/agent/tool functions live in src/cli/lib/ and can be
+ * imported here when adding new command types (e.g. tool install, project create).
  */
 
 import { existsSync } from "fs";

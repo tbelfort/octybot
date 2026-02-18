@@ -10,7 +10,7 @@ import { MemoryEngine } from "../engine";
 import { classify } from "../layer1";
 import { readConversationState, writeConversationState } from "../state";
 import { createTrace, isDevMode, getDevModeFile } from "../debug";
-import { DB_PATH, DEBUG_DIR, CONVERSATION_STATE_PATH, validateConfig } from "../config";
+import { DB_PATH, DEBUG_DIR, CONVERSATION_STATE_PATH, PROJECT_DATA, validateConfig } from "../config";
 import { reportCosts } from "../costs";
 import { appendFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -57,7 +57,12 @@ function buildContextSummary(context: string): string | undefined {
 }
 
 async function main() {
-  if (existsSync(join(homedir(), ".octybot", "memory-disabled"))) {
+  // Check global and per-agent memory disable flags
+  const octyHome = join(homedir(), ".octybot");
+  if (existsSync(join(octyHome, "memory-disabled"))) {
+    process.exit(0);
+  }
+  if (existsSync(join(PROJECT_DATA, "memory-disabled"))) {
     process.exit(0);
   }
 

@@ -14,6 +14,9 @@ interface OctybotConfig {
   active_agent?: string;
   active_bot?: string;  // deprecated — fallback for one migration cycle
   snapshot_dir?: string;
+  backup_dir?: string;
+  voyage_api_key?: string;
+  openrouter_api_key?: string;
   version?: number;
 }
 
@@ -71,7 +74,7 @@ export function setActiveAgent(name: string) {
 // ── Project-aware data paths ──
 const PROJECT_ID = getActiveProject();
 const AGENT_NAME = getActiveAgent();
-const PROJECT_DATA = join(OCTYBOT_HOME, "data", PROJECT_ID, AGENT_NAME);
+export const PROJECT_DATA = join(OCTYBOT_HOME, "data", PROJECT_ID, AGENT_NAME);
 
 export const DB_PATH = process.env.DB_PATH || join(PROJECT_DATA, "memory.db");
 export const DEBUG_DIR = join(PROJECT_DATA, "debug");
@@ -110,7 +113,12 @@ export let LAYER2_MODEL = process.env.LAYER2 || "openai/gpt-oss-120b";
 // Voyage embeddings
 export const VOYAGE_MODEL = process.env.VOYAGE_MODEL || "voyage-4";
 export function getVoyageKey(): string {
+  // 1. Environment variable (override)
   if (process.env.VOYAGE_API_KEY) return process.env.VOYAGE_API_KEY;
+  // 2. config.json (canonical)
+  const fromConfig = readConfigField("voyage_api_key");
+  if (fromConfig) return fromConfig;
+  // 3. .env in cwd or parent (dev convenience)
   for (const dir of [process.cwd(), join(process.cwd(), "..")]) {
     try {
       const envContent = readFileSync(join(dir, ".env"), "utf-8");
@@ -118,12 +126,17 @@ export function getVoyageKey(): string {
       if (match) return match[1].trim();
     } catch {}
   }
-  throw new Error("No VOYAGE_API_KEY found");
+  throw new Error("No VOYAGE_API_KEY found (set in env, ~/.octybot/config.json, or .env)");
 }
 
 // OpenRouter
 export function getOpenRouterKey(): string {
+  // 1. Environment variable (override)
   if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
+  // 2. config.json (canonical)
+  const fromConfig = readConfigField("openrouter_api_key");
+  if (fromConfig) return fromConfig;
+  // 3. .env in cwd or parent (dev convenience)
   for (const dir of [process.cwd(), join(process.cwd(), "..")]) {
     try {
       const envContent = readFileSync(join(dir, ".env"), "utf-8");
@@ -131,7 +144,7 @@ export function getOpenRouterKey(): string {
       if (match) return match[1].trim();
     } catch {}
   }
-  throw new Error("No OPENROUTER_API_KEY found");
+  throw new Error("No OPENROUTER_API_KEY found (set in env, ~/.octybot/config.json, or .env)");
 }
 
 // CF auth: read wrangler OAuth token

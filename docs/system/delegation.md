@@ -206,39 +206,38 @@ bun src/delegation/delegate.ts <target-agent> "<task>"
 #   OCTYBOT_AGENT        — calling agent name (default: "main")
 ```
 
-## Slash Command Integration
+## Skill Integration
 
-When a project is set up (`setup-project.ts`), slash commands are auto-generated from the agent connections in `agents.json`:
+When you connect agent A to agent B with `octybot agent connect A B`, a Claude Code skill is created at:
 
-For each agent A with `connections: ["B", "C"]`, the setup creates:
-- `.claude/commands/ask-B.md`
-- `.claude/commands/ask-C.md`
+```
+<A's working dir>/.claude/skills/ask-B/SKILL.md
+```
 
-Each command is generated from `templates/ask-agent.md`:
+The skill is generated from the target agent's description in `agent.json`:
 
-```markdown
+```yaml
 ---
-description: Ask the {{AGENT_NAME}} agent to handle a task
-argument-hint: <task description>
-allowed-tools: Bash
+description: "<B's description from agent.json>"
+user-invocable: false
+allowed-tools: Bash(bun *)
 ---
 
-# Ask {{AGENT_NAME}}
+Delegate a task to the **B** agent by running:
 
-Delegate a task to the **{{AGENT_NAME}}** agent ({{AGENT_DESCRIPTION}}).
-
-## Instructions
-
-Run the delegation command with the user's task:
-
-\`\`\`bash
-bun {{OCTYBOT_HOME}}/delegation/delegate.ts {{AGENT_NAME}} "$ARGUMENTS"
-\`\`\`
+```bash
+bun ~/.octybot/delegation/delegate.ts B "<your request>"
+```
 
 Wait for the response and relay the result back to the user.
 ```
 
-This means if the main agent is connected to a "researcher" agent, the user can type `/ask-researcher Find information about topic X` and the main agent will delegate the task through the bus.
+Key properties:
+- `user-invocable: false` — Claude uses this autonomously, it's not a user slash command
+- `allowed-tools: Bash(bun *)` — Claude can run the delegation command without permission
+- Claude sees the skill description in its context and invokes it when a user's question matches
+
+Connections are one-directional. `connect A B` means A can ask B. B cannot reach out to A unless you also run `connect B A`. The target agent must have a meaningful description — generic descriptions like "Primary agent" are rejected.
 
 ## How an Agent Receives a Delegated Task
 

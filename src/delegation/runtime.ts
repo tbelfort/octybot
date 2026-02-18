@@ -1,12 +1,13 @@
 /**
  * Agent runtime — spawns and manages Claude Code processes per agent.
  *
- * Each agent runs in its own project directory with its own hooks.
- * The runtime tracks spawned processes and can reap idle ones.
+ * Each agent runs in its own directory with its own hooks and memory.
+ * Agent dirs are resolved from ~/.octybot/ config and directory structure.
  */
 
 import { join } from "path";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import { homedir } from "os";
 
 export interface AgentProcess {
   name: string;
@@ -16,37 +17,79 @@ export interface AgentProcess {
 }
 
 export interface RuntimeConfig {
-  projectDir: string;
-  idleTimeoutMs?: number;  // Kill idle agents after this (default: 5 min)
+  octyHome?: string;         // defaults to ~/.octybot
+  idleTimeoutMs?: number;    // Kill idle agents after this (default: 5 min)
 }
 
 export class AgentRuntime {
   private processes = new Map<string, AgentProcess>();
-  private config: RuntimeConfig;
+  private octyHome: string;
 
-  constructor(config: RuntimeConfig) {
-    this.config = config;
+  constructor(config: RuntimeConfig = {}) {
+    this.octyHome = config.octyHome || join(homedir(), ".octybot");
+  }
+
+  /**
+   * Resolve the working directory for an agent.
+   * 1. Check config.json project_dirs for custom dir
+   * 2. Try ~/.octybot/agents/<name>/
+   * 3. Try ~/.octybot/projects/<name>/
+   */
+  private resolveAgentDir(agentName: string): string {
+    // Check for custom dir mapping in config
+    try {
+      const configPath = join(this.octyHome, "config.json");
+      if (existsSync(configPath)) {
+        const config = JSON.parse(readFileSync(configPath, "utf-8"));
+        if (config.project_dirs?.[agentName]) {
+          const customDir = config.project_dirs[agentName];
+          if (existsSync(customDir)) return customDir;
+        }
+      }
+    } catch {}
+
+    // Try agents/ then projects/
+    const agentsPath = join(this.octyHome, "agents", agentName);
+    if (existsSync(agentsPath)) return agentsPath;
+
+    const projectsPath = join(this.octyHome, "projects", agentName);
+    if (existsSync(projectsPath)) return projectsPath;
+
+    return agentsPath; // default (will fail with clear error in run())
   }
 
   /**
    * Run a command as a specific agent, passing input via stdin.
    * Returns the stdout output.
    */
-  async run(agentName: string, input: string, timeoutMs = 60000): Promise<string> {
-    const agentDir = join(this.config.projectDir, "agents", agentName);
+  async run(agentName: string, input: string, timeoutMs = 60000, systemPrompt?: string): Promise<string> {
+    const agentDir = this.resolveAgentDir(agentName);
     if (!existsSync(agentDir)) {
       throw new Error(`Agent directory not found: ${agentDir}`);
     }
 
-    const proc = Bun.spawn(["claude", "--print", "-"], {
+    // Build a clean env — strip all CLAUDE* vars so the child Claude Code
+    // instance starts fresh (no nested session detection, no stale state).
+    const cleanEnv: Record<string, string> = {};
+    for (const [key, val] of Object.entries(process.env)) {
+      if (val !== undefined && !key.startsWith("CLAUDE")) {
+        cleanEnv[key] = val;
+      }
+    }
+    cleanEnv.OCTYBOT_AGENT = agentName;
+
+    const args = ["claude", "--print", "--dangerously-skip-permissions"];
+    if (systemPrompt) {
+      args.push("--append-system-prompt", systemPrompt);
+    }
+    args.push("-");
+
+    const proc = Bun.spawn(args, {
       cwd: agentDir,
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      env: {
-        ...process.env,
-        OCTYBOT_AGENT: agentName,
-      },
+      env: cleanEnv,
     });
 
     // Guard against concurrent runs of the same agent
@@ -87,6 +130,17 @@ export class AgentRuntime {
       clearTimeout(timer!);
       const exitCode = await proc.exited;
       this.processes.delete(agentName);
+
+      // Log stderr for debugging hook issues
+      if (stderr.trim()) {
+        process.stderr.write(`[delegation:${agentName}] stderr: ${stderr.trim()}\n`);
+        try {
+          const { writeFileSync } = require("fs");
+          writeFileSync(join(this.octyHome, "delegation-debug.log"),
+            `[${new Date().toISOString()}] ${agentName}\nstdout: ${stdout.slice(0, 500)}\nstderr: ${stderr}\ncwd: ${agentDir}\nexit: ${exitCode}\n---\n`,
+            { flag: "a" });
+        } catch {}
+      }
 
       if (exitCode !== 0) {
         throw new Error(`Agent ${agentName} exited with code ${exitCode}: ${stderr}`);

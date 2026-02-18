@@ -6,11 +6,11 @@ Everything in Octybot can be run locally in Claude Code. The PWA is a replicatio
 
 This means:
 
-- **Projects, agents, and skills created via the PWA must also work directly in Claude Code** (via hooks, slash commands, and CLAUDE.md)
-- **Projects, agents, and skills created via the CLI must also appear and work in the PWA**
+- **Agents and skills created via the PWA must also work directly in Claude Code** (via hooks, skills, and CLAUDE.md)
+- **Agents and skills created via the CLI must also appear and work in the PWA**
 - **Any feature added to one side must be implemented on the other** (with one exception: voice)
 
-The two methods are not separate products. They are two interfaces to the same system. A user should be able to start a conversation on their phone, switch to Claude Code on their Mac, and pick up exactly where they left off — with the same memory, same agents, same projects.
+The two methods are not separate products. They are two interfaces to the same system. A user should be able to start a conversation on their phone, switch to Claude Code on their Mac, and pick up exactly where they left off — with the same memory, same agents, same tools.
 
 ## What the PWA Is
 
@@ -29,14 +29,12 @@ There is no separate "PWA mode" or "phone mode." The PWA is Claude Code — just
 
 | Capability | PWA | CLI |
 |-----------|-----|-----|
-| Create projects | Settings → Projects → New | `bun src/cli/setup-project.ts <name>` |
-| Create agents | Settings → Projects → New Agent | `bun src/cli/scaffold-agent.ts <project> <agent> <desc>` |
-| Switch active project | Sidebar project selector | `PATCH /settings { active_project }` or `config.json` |
-| Switch active agent | Settings → Projects → tap agent card | `PATCH /settings { active_agent }` or `config.json` |
-| Memory backup/restore | Settings → Projects → agent → Snapshot/Restore | `/octybot-memory freeze create/load <name>` |
-| Memory clear | Settings → Projects → agent → Clear | `/octybot-memory delete-all` |
-| Toggle memory | Settings → Projects → agent → toggle | `memory-disabled` flag file or `/octybot-memory` |
-| Delegate to agents | Chat naturally (agent decides) | `/ask-<agent> <task>` slash command |
+| Create agents | Settings → Agents → New | `octybot agent create <name>` |
+| Switch active agent | Sidebar agent selector | `octybot agent switch <name>` or `config.json` |
+| Memory backup/restore | Settings → Agents → agent → Snapshot/Restore | `/octybot-memory freeze create/load <name>` |
+| Memory clear | Settings → Agents → agent → Clear | `/octybot-memory delete-all` |
+| Toggle memory | Settings → Agents → agent → toggle | `memory-disabled` flag file or `/octybot-memory` |
+| Delegate to agents | Chat naturally (agent decides) | Automatic via `.claude/skills/ask-<agent>/` |
 | View conversations | Sidebar | (conversations are in D1, accessible via Worker API) |
 | Voice input | Mic button | N/A (voice is PWA-only) |
 | Text-to-speech | TTS button / handsfree | N/A (voice is PWA-only) |
@@ -60,12 +58,12 @@ Everything else must work in both interfaces.
 
 When building a new feature:
 
-1. **Start with the CLI** — make it work in Claude Code via hooks, slash commands, or direct commands
+1. **Start with the CLI** — make it work in Claude Code via hooks, skills, or direct commands
 2. **Then add the PWA surface** — create the UI that calls the same underlying system (usually via Worker API → Agent service → CLI)
 3. **Test both paths** — verify the feature works identically in both interfaces
 
 When modifying an existing feature:
 
-1. **Check both sides** — if you change how projects work in the PWA, make sure the CLI still works correctly
+1. **Check both sides** — if you change how agents work in the PWA, make sure the CLI still works correctly
 2. **Keep the Worker as the sync point** — the Worker's D1 database is the shared state between CLI and PWA
 3. **Don't create PWA-only state** — if the PWA needs to track something, it should go through the Worker so the CLI can access it too

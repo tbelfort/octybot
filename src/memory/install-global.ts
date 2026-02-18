@@ -21,8 +21,9 @@
  *     memory/       ← memory system files + hooks
  *     worker/       ← worker source (for deploying)
  *     pwa/          ← PWA source (for deploying)
- *     data/         ← per-project/bot data
- *     projects/     ← Claude Code working dirs
+ *     data/         ← per-agent data
+ *     agents/       ← agent working dirs (Claude Code)
+ *     projects/     ← legacy agent dirs (backward compat)
  *     tools/        ← user Python tools
  *     skill_agents/ ← skill agent working dirs
  */
@@ -138,6 +139,15 @@ const BIN_FILES_FROM_ROOT = [
 const BIN_FILES_NEW = [
   "agent-runner.ts",
   "setup-project.ts",
+];
+
+const CLI_LIB_FILES = [
+  "projects.ts",
+  "agents.ts",
+  "backup.ts",
+  "tools.ts",
+  "tools-db.ts",
+  "admin-agent.ts",
 ];
 
 // ── Helpers ──
@@ -298,7 +308,7 @@ async function main() {
   const created: string[] = [];
 
   // 1. Create top-level directories
-  for (const dir of ["bin", "delegation", "shared", "memory", "data", "projects", "tools", "skill_agents", "logs", "agents"]) {
+  for (const dir of ["bin", "delegation", "shared", "memory", "data", "projects", "tools", "skills", "skill_agents", "admin_agent", "admin_agent/workspace", "logs", "agents"]) {
     const fullDir = join(OCTYBOT_HOME, dir);
     if (!existsSync(fullDir)) {
       mkdirSync(fullDir, { recursive: true });
@@ -339,6 +349,21 @@ async function main() {
         copied.push(`bin/${file}`);
       } else {
         skipped.push(`bin/${file}`);
+      }
+    }
+  }
+
+  // 4b. Copy cli/lib/ files
+  const targetLib = join(OCTYBOT_HOME, "bin", "lib");
+  mkdirSync(targetLib, { recursive: true });
+  for (const file of CLI_LIB_FILES) {
+    const srcPath = join(OCTYBOT_ROOT, "src", "cli", "lib", file);
+    const dstPath = join(targetLib, file);
+    if (existsSync(srcPath)) {
+      if (copyIfChanged(srcPath, dstPath)) {
+        copied.push(`bin/lib/${file}`);
+      } else {
+        skipped.push(`bin/lib/${file}`);
       }
     }
   }
@@ -417,7 +442,35 @@ async function main() {
     copyDirRecursive(templatesSrc, join(OCTYBOT_HOME, "templates"), "templates", copied, skipped);
   }
 
-  // 12. Create config.json with defaults if not exists
+  // 12. Set up admin agent CLAUDE.md
+  const adminClaudeMd = join(OCTYBOT_HOME, "admin_agent", "CLAUDE.md");
+  if (!existsSync(adminClaudeMd)) {
+    writeFileSync(adminClaudeMd, `# Octybot Admin Agent
+
+You are an admin agent for Octybot. You analyze tools and generate Claude Code skills.
+
+## Your job
+When given a tool to analyze:
+1. Read the tool code thoroughly
+2. Understand its purpose, inputs, outputs, and dependencies
+3. Write a skill file (.md) that another Claude Code agent can use
+4. Test the tool if possible (--help, dry-run, etc.)
+5. Write the skill to the workspace directory
+
+## Skill format
+Skills are markdown files used as Claude Code slash commands. They should contain:
+- A YAML frontmatter block with: description, argument-hint, allowed-tools
+- What the tool does (1-2 sentences)
+- When to use it
+- How to invoke it (exact command with path)
+- Arguments and options
+- Example usage
+- Error handling notes
+`);
+    created.push("admin_agent/CLAUDE.md");
+  }
+
+  // 13. Create config.json with defaults if not exists
   const configPath = join(OCTYBOT_HOME, "config.json");
   if (!existsSync(configPath)) {
     const defaultConfig = {
@@ -454,7 +507,7 @@ async function main() {
 
   console.log("\nGlobal install complete.");
   console.log(`  Home: ${OCTYBOT_HOME}`);
-  console.log("  Next: bun ~/.octybot/bin/setup-project.ts <project-name>");
+  console.log("  Next: octybot agent create <name>");
 }
 
 main();

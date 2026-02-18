@@ -9,7 +9,7 @@ import { MemoryEngine } from "../engine";
 import { classify } from "../layer1";
 import { createTrace } from "../debug";
 import { reportCosts } from "../costs";
-import { DB_PATH, validateConfig } from "../config";
+import { DB_PATH, PROJECT_DATA, validateConfig } from "../config";
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -72,7 +72,11 @@ function parseTranscript(transcriptPath: string): {
 }
 
 async function main() {
-  if (existsSync(join(homedir(), ".octybot", "memory-disabled"))) {
+  const octyHome = join(homedir(), ".octybot");
+  if (existsSync(join(octyHome, "memory-disabled"))) {
+    process.exit(0);
+  }
+  if (existsSync(join(PROJECT_DATA, "memory-disabled"))) {
     process.exit(0);
   }
 

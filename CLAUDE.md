@@ -2,17 +2,31 @@ This is the Octybot source repository. Octybot installs globally to `~/.octybot/
 
 ## Global installation
 
-Octybot installs once globally, then projects are lightweight Claude Code working dirs that point to the global system:
+Octybot installs once globally, then agents are lightweight Claude Code working dirs that point to the global system:
 
 ```bash
 bun src/memory/install-global.ts          # install/update ~/.octybot/
-bun src/cli/setup-project.ts <name>       # create a project
-cd ~/.octybot/projects/<name> && claude   # use it
+octybot agent create <name>               # create an agent
+cd ~/.octybot/agents/<name> && claude      # use it
 ```
 
-- `~/.octybot/config.json` — worker URL, active project/agent
-- `~/.octybot/data/<project>/<agent>/` — per-project/agent memory data
-- `~/.octybot/projects/<name>/` — Claude Code working dirs with hooks
+- `~/.octybot/config.json` — worker URL, active agent
+- `~/.octybot/data/<name>/<name>/` — per-agent memory data
+- `~/.octybot/agents/<name>/` — agent working dirs with hooks and skills
+
+## How agents communicate
+
+Agents talk to each other via **Claude Code skills** (not commands). When you connect agent A to agent B with `octybot agent connect A B`:
+
+1. A skill is created at `<A's working dir>/.claude/skills/ask-B/SKILL.md`
+2. The skill has `user-invocable: false` — Claude uses it autonomously, it's not a user command
+3. The skill description matches B's description from `agent.json`
+4. Claude sees the description in context and invokes the skill when relevant
+5. The skill runs `bun ~/.octybot/delegation/delegate.ts B "<request>"` to delegate
+
+Connections are one-directional. `connect A B` means A can ask B, not the other way around. The target agent must have a meaningful description in its `agent.json`.
+
+See `ai_docs/claude-code-skills.md` for the full Claude Code skills reference.
 
 ## How memory works
 - Memory retrieval and storage happen AUTOMATICALLY via hooks (UserPromptSubmit / Stop).
@@ -28,8 +42,10 @@ cd ~/.octybot/projects/<name> && claude   # use it
 - `src/shared/` — shared modules (shell, api-types)
 - `src/worker/` — Cloudflare Worker relay (Hono router, D1)
 - `src/pwa/` — mobile PWA (TypeScript modules, bundled via Bun)
-- `src/cli/` — CLI and scripts (octybot, setup-project, scaffold-agent)
-- `templates/` — agent scaffolding templates (CLAUDE.md, settings, slash commands)
+- `src/cli/` — CLI and scripts (octybot, setup-project)
+- `src/cli/lib/` — shared functions (agents, tools, backup, projects)
+- `templates/` — agent scaffolding templates (CLAUDE.md, settings)
+- `ai_docs/` — reference docs for AI assistants (skills, frameworks, APIs)
 - `tests/` — unit tests (bus, registry, assemble, db)
 - `deploy.ts` — deployment orchestrator
 - `setup.ts` — automated first-time setup

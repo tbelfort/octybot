@@ -82,10 +82,11 @@ export function getProjectDir(project?: string): string {
     if (existsSync(customDir)) return customDir;
   }
 
+  // Try agents/ first, fall back to projects/
+  const agentDir = join(OCTYBOT_HOME, "agents", activeProject);
+  if (existsSync(agentDir)) return agentDir;
   const projectDir = join(OCTYBOT_HOME, "projects", activeProject);
-  // Fall back to source repo if project dir doesn't exist
-  if (!existsSync(projectDir)) {
-    return join(import.meta.dir, "../..");
-  }
-  return projectDir;
+  if (existsSync(projectDir)) return projectDir;
+  // Fall back to source repo if neither exists
+  return join(import.meta.dir, "../..");
 }
